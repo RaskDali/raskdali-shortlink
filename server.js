@@ -1,52 +1,60 @@
-import express from "express";
-import fs from "fs";
+import express from 'express';
+import fs from 'fs/promises';
+import { nanoid } from 'nanoid';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const DB_FILE = "links.json";
-
-// Nedidelė atminties (RAM) duomenų bazė
-let links = {};
-
-// Bando užkrauti iš failo (jei yra)
-if (fs.existsSync(DB_FILE)) {
-  links = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-}
-
-// Sutrumpinto linko sugeneravimas
-function generateShortCode(length = 5) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let code = "";
-  for (let i = 0; i < length; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
-// Sukuria naują shortlink
 app.use(express.json());
-app.post("/api/create", (req, res) => {
-  const { data } = req.body;
-  if (!data) return res.status(400).json({ error: "Missing data" });
+let offers = {};
 
-  let code;
-  do {
-    code = generateShortCode();
-  } while (links[code]);
+// Užkrauk pasiūlymus jei yra
+try {
+  offers = JSON.parse(await fs.readFile('offers.json', 'utf8'));
+} catch (e) { offers = {}; }
 
-  links[code] = data;
-  fs.writeFileSync(DB_FILE, JSON.stringify(links));
-  res.json({ short: code });
+// 1. Sukurti naują pasiūlymą ir grąžinti trumpą nuorodą
+app.post('/api/sukurti-pasiulyma', async (req, res) => {
+  const data = req.body; // visa pasiūlymo info
+  const id = nanoid(6);
+  offers[id] = data;
+  await fs.writeFile('offers.json', JSON.stringify(offers, null, 2));
+  res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
 });
 
-// Atidaro linko duomenis
-app.get("/:code", (req, res) => {
-  const { code } = req.params;
-  const data = links[code];
-  if (!data) return res.status(404).send("Not found");
-  res.json({ data });
+// 2. Klientas pagal nuorodą mato savo pasiūlymą
+app.get('/klientoats/:id', (req, res) => {
+  const offer = offers[req.params.id];
+  if (!offer) return res.status(404).send('Pasiūlymas nerastas');
+  res.send(`
+    <h1>Detalių pasiūlymas</h1>
+    <form method="POST" action="/klientoats/${req.params.id}/order">
+      ${offer.items.map((item, i) => `
+        <div>
+          <b>${item.title}</b> – ${item.price}€
+          <img src="${item.img || ''}" style="max-width:90px"><br>
+          <label><input type="checkbox" name="choose" value="${i}"> Užsakyti</label>
+        </div>
+      `).join('')}
+      <button type="submit">Užsakyti pasirinktas</button>
+    </form>
+  `);
 });
 
-app.listen(PORT, () => {
-  console.log("Shortlink server running on port " + PORT);
+// 3. Gauti pasirinkimą (užsakymą)
+app.use(express.urlencoded({ extended: true }));
+app.post('/klientoats/:id/order', (req, res) => {
+  const offer = offers[req.params.id];
+  if (!offer) return res.status(404).send('Nerasta');
+  const pasirinktos = req.body.choose || [];
+  // Čia gali padaryt: išsiųsti tau į email arba išsaugoti faile
+  // Dabar grąžina ką pasirinko
+  res.send(`
+    <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
+    <p>Pasirinktos prekės:</p>
+    <ul>
+      ${Array.isArray(pasirinktos) ? pasirinktos.map(i => `<li>${offer.items[i].title}</li>`).join('') : `<li>${offer.items[pasirinktos].title}</li>`}
+    </ul>
+  `);
 });
+
+const port = process.env.PORT || 10000;
+app.listen(port, () => console.log('Serveris veikia ant port ' + port));

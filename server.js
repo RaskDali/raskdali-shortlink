@@ -1,12 +1,14 @@
 import express from 'express';
 import fs from 'fs/promises';
 import { nanoid } from 'nanoid';
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// --- CORS Middleware ---
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -15,22 +17,19 @@ app.use((req, res, next) => {
 });
 
 let offers = {};
-
-// --- Užkrauna pasiūlymus, jei yra ---
 try {
   offers = JSON.parse(await fs.readFile('offers.json', 'utf8'));
 } catch (e) { offers = {}; }
 
-// 1. Sukuria naują pasiūlymą ir grąžina trumpą nuorodą
 app.post('/api/sukurti-pasiulyma', async (req, res) => {
-  const data = req.body; // visa pasiūlymo info (turi būti: { items: [ ... ] })
+  const data = req.body; // { items: [...] }
   const id = nanoid(6);
   offers[id] = data;
   await fs.writeFile('offers.json', JSON.stringify(offers, null, 2));
   res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
 });
 
-// 2. Klientas pagal nuorodą mato savo pasiūlymą
+// Klientas mato pasiūlymą
 app.get('/klientoats/:id', (req, res) => {
   const offer = offers[req.params.id];
   if (!offer) return res.status(404).send('Pasiūlymas nerastas');
@@ -46,16 +45,34 @@ app.get('/klientoats/:id', (req, res) => {
           .item:last-child { border-bottom: none; }
           .img-preview { max-width: 90px; max-height: 70px; display: block; margin: 8px 0; }
           .order-btn { margin: 22px auto 0; display: block; background: #4A72E3; color: #fff; border: none; border-radius: 8px; padding: 12px 30px; font-size: 1.15em; cursor: pointer; }
+          .order-sum { text-align:right; font-size:1.13em; margin:10px 0 12px 0;}
           label { font-weight: normal; font-size: 1em; }
         </style>
+        <script>
+        function updateSum() {
+          let sumBe = 0, sumSu = 0;
+          document.querySelectorAll('input[type=checkbox][name=choose]:checked').forEach(chk => {
+            const novat = chk.dataset.priceNovat, vat = chk.dataset.priceVat;
+            if (novat) sumBe += parseFloat(novat.replace(',', '.'));
+            if (vat) sumSu += parseFloat(vat.replace(',', '.'));
+          });
+          document.getElementById('suma').innerHTML = "Suma pasirinkta: <b>" + sumSu.toFixed(2) + "€</b> (be PVM " + sumBe.toFixed(2) + "€)";
+        }
+        </script>
       </head>
       <body>
         <div class="wrapper">
         <h1>Detalių pasiūlymas</h1>
         <form method="POST" action="/klientoats/${req.params.id}/order">
+          <div>
+            <label>Vardas, pavardė/įmonė:<br><input name="vardas" required style="width:99%"></label><br>
+            <label>El. paštas:<br><input type="email" name="email" required style="width:99%"></label><br>
+            <label>Pristatymo adresas:<br><input name="adresas" required style="width:99%"></label><br>
+          </div>
+          <hr>
           ${(offer.items || []).map((item, i) => `
             <div class="item">
-              <b>${item.name || ''}</b>
+              <b>${item.pozNr ? `${item.pozNr}. ` : ""}${item.name || ''}</b>
               ${item.type ? `<span style="color:#4066B2; font-size:0.92em; margin-left:8px;">(${item.type})</span>` : ""}
               <div>
                 ${item.imgSrc ? `<img src="${item.imgSrc}" class="img-preview">` : ""}
@@ -67,10 +84,11 @@ app.get('/klientoats/:id', (req, res) => {
                 ${item["price-novat"] ? `(<span style="color:#888; font-size:0.95em">be PVM ${item["price-novat"]}€</span>)` : ""}
               </div>
               <label>
-                <input type="checkbox" name="choose" value="${i}"> Užsakyti šią detalę
+                <input type="checkbox" name="choose" value="${i}" data-price-novat="${item["price-novat"]}" data-price-vat="${item["price-vat"]}" onchange="updateSum()"> Užsakyti šią detalę
               </label>
             </div>
           `).join('')}
+          <div id="suma" class="order-sum">Suma pasirinkta: <b>0.00€</b> (be PVM 0.00€)</div>
           <button type="submit" class="order-btn">Užsakyti pasirinktas</button>
         </form>
         </div>
@@ -79,12 +97,57 @@ app.get('/klientoats/:id', (req, res) => {
   `);
 });
 
-// 3. Gauti pasirinkimą (užsakymą)
-app.post('/klientoats/:id/order', (req, res) => {
+app.post('/klientoats/:id/order', async (req, res) => {
   const offer = offers[req.params.id];
   if (!offer) return res.status(404).send('Nerasta');
-  const pasirinktos = req.body.choose || [];
-  // Parodo ką pasirinko vartotojas
+  const pasirinktos = req.body.choose ? (Array.isArray(req.body.choose) ? req.body.choose : [req.body.choose]) : [];
+  const name = req.body.vardas || '';
+  const email = req.body.email || '';
+  const adresas = req.body.adresas || '';
+  let total = 0, totalBe = 0;
+
+  let pasirinktosPrekes = pasirinktos.map(i => offer.items[i]);
+  pasirinktosPrekes.forEach(item => {
+    total += parseFloat((item?.["price-vat"] || "0").replace(',', '.'));
+    totalBe += parseFloat((item?.["price-novat"] || "0").replace(',', '.'));
+  });
+
+  // El. paštas - reikia susikurti .env failą su GMAIL_USER, GMAIL_PASS
+  if (email && pasirinktosPrekes.length) {
+    let transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER, // tavo gmail
+        pass: process.env.GMAIL_PASS // app password iš Google
+      }
+    });
+
+    // El. laiško tekstas
+    let detalesHtml = pasirinktosPrekes.map(item => `
+      <li><b>${item.pozNr ? `${item.pozNr}. ` : ''}${item.name || ''}</b> 
+      (${item.type || ''}) – ${item["price-vat"] || ''}€ 
+      ${item.desc ? `<i>${item.desc}</i>` : ''}</li>
+    `).join('');
+    let uzsakymasHtml = `
+      <h3>Gautas užsakymas</h3>
+      <b>Vardas/įmonė:</b> ${name}<br>
+      <b>El. paštas:</b> ${email}<br>
+      <b>Adresas:</b> ${adresas}<br>
+      <b>Prekės:</b><ul>${detalesHtml}</ul>
+      <b>Viso su PVM:</b> ${total.toFixed(2)} €<br>
+      <b>Viso be PVM:</b> ${totalBe.toFixed(2)} €
+    `;
+
+    // Siunčiam tau ir klientui
+    await transporter.sendMail({
+      from: `"RaskDali" <${process.env.GMAIL_USER}>`,
+      to: `${email},${process.env.GMAIL_USER}`,
+      subject: "Užsakytos detalės – RaskDali",
+      html: uzsakymasHtml
+    });
+  }
+
+  // Atsakymas klientui
   res.send(`
     <html>
     <head>
@@ -99,11 +162,11 @@ app.post('/klientoats/:id/order', (req, res) => {
         <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
         <p>Pasirinktos prekės:</p>
         <ul>
-          ${Array.isArray(pasirinktos)
-            ? pasirinktos.map(i => `<li>${offer.items[i]?.name || ''}</li>`).join('')
-            : `<li>${offer.items[pasirinktos]?.name || ''}</li>`
-          }
+          ${pasirinktosPrekes.map(item => `<li>${item.pozNr ? `${item.pozNr}. ` : ''}${item.name || ''} (${item.type || ''}) – ${item["price-vat"] || ''}€</li>`).join('')}
         </ul>
+        <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
+        <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
+        <div style="margin-top:14px;">Greitu metu atsiųsime sąskaitą apmokėjimui.</div>
       </div>
     </body>
     </html>

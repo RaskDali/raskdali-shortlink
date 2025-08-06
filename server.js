@@ -21,6 +21,18 @@ try {
   offers = JSON.parse(await fs.readFile('offers.json', 'utf8'));
 } catch (e) { offers = {}; }
 
+// ---- SMTP KONFIGŪRACIJA (Hostinger)
+const transporter = nodemailer.createTransport({
+  host: process.env.MAIL_HOST,
+  port: parseInt(process.env.MAIL_PORT || "465"),
+  secure: true,
+  auth: {
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASS,
+  }
+});
+
+// ---- Naujo pasiūlymo sukūrimas
 app.post('/api/sukurti-pasiulyma', async (req, res) => {
   const data = req.body; // { items: [...] }
   const id = nanoid(6);
@@ -29,7 +41,7 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
   res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
 });
 
-// Klientas mato pasiūlymą
+// ---- Kliento puslapis
 app.get('/klientoats/:id', (req, res) => {
   const offer = offers[req.params.id];
   if (!offer) return res.status(404).send('Pasiūlymas nerastas');
@@ -97,6 +109,7 @@ app.get('/klientoats/:id', (req, res) => {
   `);
 });
 
+// ---- Užsakymo gavimas ir laiškų siuntimas
 app.post('/klientoats/:id/order', async (req, res) => {
   const offer = offers[req.params.id];
   if (!offer) return res.status(404).send('Nerasta');
@@ -112,24 +125,15 @@ app.post('/klientoats/:id/order', async (req, res) => {
     totalBe += parseFloat((item?.["price-novat"] || "0").replace(',', '.'));
   });
 
-  // El. paštas - reikia susikurti .env failą su GMAIL_USER, GMAIL_PASS
+  // Laiškas tau
   if (email && pasirinktosPrekes.length) {
-    let transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER, // tavo gmail
-        pass: process.env.GMAIL_PASS // app password iš Google
-      }
-    });
-
-    // El. laiško tekstas
     let detalesHtml = pasirinktosPrekes.map(item => `
       <li><b>${item.pozNr ? `${item.pozNr}. ` : ''}${item.name || ''}</b> 
       (${item.type || ''}) – ${item["price-vat"] || ''}€ 
       ${item.desc ? `<i>${item.desc}</i>` : ''}</li>
     `).join('');
     let uzsakymasHtml = `
-      <h3>Gautas užsakymas</h3>
+      <h3>Gautas naujas užsakymas</h3>
       <b>Vardas/įmonė:</b> ${name}<br>
       <b>El. paštas:</b> ${email}<br>
       <b>Adresas:</b> ${adresas}<br>
@@ -137,17 +141,39 @@ app.post('/klientoats/:id/order', async (req, res) => {
       <b>Viso su PVM:</b> ${total.toFixed(2)} €<br>
       <b>Viso be PVM:</b> ${totalBe.toFixed(2)} €
     `;
+    // Laiškas klientui – GAVOME užsakymą
+    let klientuiHtml = `
+      <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
+      <p>Jūsų pasirinktos prekės:</p>
+      <ul>${detalesHtml}</ul>
+      <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
+      <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
+      <p>Jūsų užsakymą gavome. Netrukus el. paštu atsiųsime sąskaitą su apmokėjimo nuoroda.</p>
+      <br>
+      <b>RaskDali komanda</b>
+    `;
 
-    // Siunčiam tau ir klientui
-    await transporter.sendMail({
-      from: `"RaskDali" <${process.env.GMAIL_USER}>`,
-      to: `${email},${process.env.GMAIL_USER}`,
-      subject: "Užsakytos detalės – RaskDali",
-      html: uzsakymasHtml
-    });
+    try {
+      // Tau (administratorius)
+      await transporter.sendMail({
+        from: `"RaskDali" <${process.env.MAIL_USER}>`,
+        to: process.env.MAIL_USER,
+        subject: "Naujas detalių užsakymas iš RaskDali",
+        html: uzsakymasHtml
+      });
+      // Klientui
+      await transporter.sendMail({
+        from: `"RaskDali" <${process.env.MAIL_USER}>`,
+        to: email,
+        subject: "Jūsų užsakymas priimtas – RaskDali",
+        html: klientuiHtml
+      });
+    } catch (e) {
+      console.error("Nepavyko išsiųsti el. laiško:", e);
+    }
   }
 
-  // Atsakymas klientui
+  // Atsakymas klientui naršyklėje
   res.send(`
     <html>
     <head>
@@ -166,7 +192,7 @@ app.post('/klientoats/:id/order', async (req, res) => {
         </ul>
         <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
         <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
-        <div style="margin-top:14px;">Greitu metu atsiųsime sąskaitą apmokėjimui.</div>
+        <div style="margin-top:14px;">Greitu metu atsiųsime sąskaitą apmokėjimui el. paštu.</div>
       </div>
     </body>
     </html>

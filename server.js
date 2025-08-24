@@ -203,6 +203,7 @@ app.post('/klientoats/:id/order', async (req, res) => {
 const port = process.env.PORT || 10000;
 // ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
 // nuotraukas laikom atminty, ribojam po 5MB vienai
+// ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 40 },
@@ -210,6 +211,10 @@ const upload = multer({
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
   try {
+    // Greita diagnostika (laikinai – peržiūrėsi Render Loguose)
+    console.log('BODY KEYS:', Object.keys(req.body));
+    console.log('FILES:', (req.files || []).map(f => f.fieldname));
+
     // bendri laukai
     const vin      = (req.body.vin || '').trim();
     const marke    = (req.body.marke || '').trim();
@@ -224,15 +229,15 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // surenkam detales (tik tas, kuriose yra pavadinimas)
+    // surenkam detales – užtenka BET KURIO lauko (name || desc || notes || file)
     const items = [];
     for (let i = 0; i < count; i++) {
       const name  = (req.body[`items[${i}][name]`]  || '').trim();
       const desc  = (req.body[`items[${i}][desc]`]  || '').trim();
       const notes = (req.body[`items[${i}][notes]`] || '').trim();
-      if (!name) continue;
+      const file  = (req.files || []).find(f => f.fieldname === `items[${i}][image]`);
 
-      const hasAny = name || desc || notes || file;   // ← bent vienas laukas
+      const hasAny = !!(name || desc || notes || file);
       if (!hasAny) continue;
 
       items.push({ idx: i + 1, name, desc, notes, file });
@@ -245,7 +250,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     // paruošiam HTML
     const listHtml = items.map(it => `
       <li>
-        <b>${it.idx}. ${escapeHtml(it.name)}</b>
+        <b>${it.idx}. ${escapeHtml(it.name || '(be pavadinimo)')}</b>
         ${it.desc  ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>`   : ''}
         ${it.notes ? `<div>Pastabos: ${escapeHtml(it.notes)}</div>`  : ''}
       </li>
@@ -283,7 +288,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       attachments
     });
 
-    // laiškas KLIENTUI (jei įvedė el. paštą)
+    // laiškas KLIENTUI
     if (email) {
       await transporter.sendMail({
         from: `"RaskDali" <${admin}>`,

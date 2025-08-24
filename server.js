@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs/promises';
 import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
+import multer from 'multer';
 import dotenv from 'dotenv';
 dotenv.config();
 

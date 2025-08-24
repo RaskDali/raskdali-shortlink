@@ -206,21 +206,38 @@ const port = process.env.PORT || 10000;
 // ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 40 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 60 },
 });
+
+function readField(body, i, field) {
+  const candidates = [
+    `items[${i}][${field}]`,
+    `items.${i}.${field}`,
+    `items_${i}_${field}`,
+    `items${i}${field}`
+  ];
+  for (const k of candidates) {
+    if (body[k] != null) return String(body[k]).trim();
+  }
+  return '';
+}
+
+function findFile(files, i) {
+  return (files || []).find(f => {
+    const fn = f.fieldname || '';
+    return fn === `items[${i}][image]`
+        || fn === `items.${i}.image`
+        || (fn.includes(`items[${i}]`) && fn.includes('image'))
+        || (fn.includes(`items.${i}`) && fn.includes('image'));
+  });
+}
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
   try {
-    // Greita diagnostika (laikinai – peržiūrėsi Render Loguose)
-    console.log('BODY KEYS:', Object.keys(req.body));
-    console.log('FILES:', (req.files || []).map(f => f.fieldname));
-
-    // bendri laukai
     const vin      = (req.body.vin || '').trim();
     const marke    = (req.body.marke || '').trim();
     const modelis  = (req.body.modelis || '').trim();
     const metai    = (req.body.metai || '').trim();
-
     const komentaras = (req.body.komentaras || '').trim();
     const vardas     = (req.body.vardas || '').trim();
     const email      = (req.body.email || '').trim();
@@ -229,97 +246,115 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // ---- SURINKTI DETALES IŠ ĮVAIRIŲ FORMATŲ ----
-// palaikomi 3 formatai: items[0][name]  |  items[0].name  |  items_0_name
-function readField(body, i, key) {
-  const k1 = `items[${i}][${key}]`;
-  const k2 = `items[${i}].${key}`;
-  const k3 = `items_${i}_${key}`;
-  return (body[k1] ?? body[k2] ?? body[k3] ?? '').toString().trim();
-}
-function findFile(files, i) {
-  const f1 = `items[${i}][image]`;
-  const f2 = `items[${i}].image`;
-  const f3 = `items_${i}_image`;
-  return (files || []).find(f => f.fieldname === f1 || f.fieldname === f2 || f.fieldname === f3);
-}
+    const items = [];
+    for (let i = 0; i < count; i++) {
+      const name  = readField(req.body, i, 'name');
+      const desc  = readField(req.body, i, 'desc');
+      const notes = readField(req.body, i, 'notes');
+      const file  = findFile(req.files, i);
 
-const items = [];
-for (let i = 0; i < count; i++) {
-  const name  = readField(req.body, i, 'name');
-  const desc  = readField(req.body, i, 'desc');
-  const notes = readField(req.body, i, 'notes');
-  const file  = findFile(req.files, i);
+      if (!(name || desc || notes || file)) continue; // nieko neužpildė
+      items.push({ idx: i + 1, name, desc, notes, file });
+    }
 
-  const hasAny = !!(name || desc || notes || file);
-  if (!hasAny) continue;
+    if (!items.length) {
+      return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
+    }
 
-  items.push({ idx: i + 1, name, desc, notes, file });
-}
+    // --- gražesnis laiško HTML su logotipu ir CID miniatiūromis (adminui)
+    const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
 
-if (!items.length) {
-  // Debug – pirmai dienai: pamatysi kas ateina
-  console.log('DEBUG body keys:', Object.keys(req.body));
-  console.log('DEBUG file fields:', (req.files || []).map(f => f.fieldname));
-  return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
-}
+    const adminItemsHtml = items.map((it, idx) => {
+      const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
+      const title  = it.name ? escapeHtml(it.name) : '(be pavadinimo)';
+      return `
+        <div style="padding:10px 12px;border:1px solid #eee;border-radius:10px;margin:8px 0">
+          <div style="font-weight:600">#${it.idx}: ${title}</div>
+          ${it.desc  ? `<div><b>Aprašymas:</b> ${escapeHtml(it.desc)}</div>`   : ''}
+          ${it.notes ? `<div><b>Pastabos:</b> ${escapeHtml(it.notes)}</div>`   : ''}
+          ${imgTag}
+        </div>
+      `;
+    }).join('');
 
-
-    // paruošiam HTML
-    const listHtml = items.map(it => `
-      <li>
-        <b>${it.idx}. ${escapeHtml(it.name || '(be pavadinimo)')}</b>
-        ${it.desc  ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>`   : ''}
-        ${it.notes ? `<div>Pastabos: ${escapeHtml(it.notes)}</div>`  : ''}
-      </li>
-    `).join('');
-
-    const commonHtml = `
-      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45">
-        <div><b>Planas:</b> ${escapeHtml(plan)} | <b>Detalių (užpildyta):</b> ${items.length}</div>
-        <div><b>VIN:</b> ${escapeHtml(vin)} | <b>Markė:</b> ${escapeHtml(marke)} | <b>Modelis:</b> ${escapeHtml(modelis)} | <b>Metai:</b> ${escapeHtml(metai)}</div>
-        <div><b>Vardas/įmonė:</b> ${escapeHtml(vardas)} | <b>El. paštas:</b> ${escapeHtml(email)} | <b>Tel.:</b> ${escapeHtml(tel)}</div>
-        ${komentaras ? `<div><b>Komentarai:</b> ${escapeHtml(komentaras)}</div>` : ''}
-        <hr>
-        <div><b>Detalės:</b></div>
-        <ul style="margin-top:6px">${listHtml}</ul>
+    const commonTop = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
+        <tr><td style="padding:16px 0">
+          <img src="${logoUrl}" alt="RaskDali" style="height:26px">
+        </td></tr>
+      </table>
+      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">
+        <p style="margin:0 0 12px 0">
+          <b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; 
+          <b>Detalių (užpildyta):</b> ${items.length}
+        </p>
+        <p style="margin:0 0 12px 0">
+          <b>VIN:</b> ${escapeHtml(vin)} &nbsp;|&nbsp; 
+          <b>Markė:</b> ${escapeHtml(marke)} &nbsp;|&nbsp; 
+          <b>Modelis:</b> ${escapeHtml(modelis)} &nbsp;|&nbsp; 
+          <b>Metai:</b> ${escapeHtml(metai)}
+        </p>
+        <p style="margin:0 0 12px 0">
+          <b>Vardas/įmonė:</b> ${escapeHtml(vardas)} &nbsp;|&nbsp; 
+          <b>El. paštas:</b> ${escapeHtml(email)} &nbsp;|&nbsp; 
+          <b>Tel.:</b> ${escapeHtml(tel)}
+        </p>
+        ${komentaras ? `<p style="margin:0 0 12px 0"><b>Komentarai:</b> ${escapeHtml(komentaras)}</p>` : ''}
+        <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
       </div>
     `;
 
-    // priedai (nuotraukos)
-    const attachments = items
-      .filter(it => it.file)
-      .map(it => ({
+    const adminHtml = `
+      ${commonTop}
+      <div style="font-family:Arial,sans-serif;font-size:14px">
+        ${adminItemsHtml}
+      </div>
+    `;
+
+    // --- pririšame inline paveikslėlius (CID), kad matytum, kuri foto kuriai detalei
+    const attachments = items.map((it, idx) => {
+      if (!it.file) return null;
+      return {
         filename: it.file.originalname || `detale_${it.idx}.jpg`,
         content: it.file.buffer,
-        contentType: it.file.mimetype || 'application/octet-stream'
-      }));
+        contentType: it.file.mimetype || 'application/octet-stream',
+        cid: `item${idx}_cid`
+      };
+    }).filter(Boolean);
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // laiškas TAU
+    // Tau (admin)
     await transporter.sendMail({
       from: `"RaskDali" <${admin}>`,
       to: admin,
       subject: `Užklausa (${plan}) – ${vardas || 'klientas'}`,
-      html: `<h2>Gauta nauja užklausa</h2>${commonHtml}`,
+      html: adminHtml,
       attachments
     });
 
-    // laiškas KLIENTUI
+    // Klientui – gražesnis patvirtinimas
     if (email) {
+      const clientHtml = `
+        ${commonTop}
+        <div style="font-family:Arial,sans-serif;font-size:14px">
+          <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
+          <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Greitu metu susisieksime.</p>
+          <p style="margin:10px 0 0 0">Primename: dažniausiai pristatymas 1–14 d. (gali būti iki 30 d.).</p>
+          <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
+          ${items.map(it => `
+            <div style="padding:8px 0">
+              <div><b>#${it.idx}:</b> ${escapeHtml(it.name || '(be pavadinimo)')}</div>
+              ${it.desc ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
       await transporter.sendMail({
         from: `"RaskDali" <${admin}>`,
         to: email,
         subject: 'Jūsų užklausa gauta – RaskDali',
-        html: `
-          <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45">
-            <h2>Jūsų užklausa gauta 🎉</h2>
-            <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Greitu metu susisieksime.</p>
-            <p>Primename: dažniausiai pristatymas 1–14 d. (gali būti iki 30 d.).</p>
-            ${commonHtml}
-          </div>
-        `
+        html: clientHtml
       });
     }
 

@@ -200,4 +200,118 @@ app.post('/klientoats/:id/order', async (req, res) => {
 });
 
 const port = process.env.PORT || 10000;
+// ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
+// nuotraukas laikom atminty, ribojam po 5MB vienai
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 40 },
+});
+
+app.post('/api/uzklausa', upload.any(), async (req, res) => {
+  try {
+    // bendri laukai
+    const vin      = (req.body.vin || '').trim();
+    const marke    = (req.body.marke || '').trim();
+    const modelis  = (req.body.modelis || '').trim();
+    const metai    = (req.body.metai || '').trim();
+
+    const komentaras = (req.body.komentaras || '').trim();
+    const vardas     = (req.body.vardas || '').trim();
+    const email      = (req.body.email || '').trim();
+    const tel        = (req.body.tel || '').trim();
+
+    const plan  = (req.body.plan || 'Nežinomas').trim();
+    const count = Math.max(1, parseInt(req.body.count || '5', 10));
+
+    // surenkam detales (tik tas, kuriose yra pavadinimas)
+    const items = [];
+    for (let i = 0; i < count; i++) {
+      const name  = (req.body[`items[${i}][name]`]  || '').trim();
+      const desc  = (req.body[`items[${i}][desc]`]  || '').trim();
+      const notes = (req.body[`items[${i}][notes]`] || '').trim();
+      if (!name) continue;
+
+      const file = (req.files || []).find(f => f.fieldname === `items[${i}][image]`);
+      items.push({ idx: i + 1, name, desc, notes, file });
+    }
+
+    if (!items.length) {
+      return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
+    }
+
+    // paruošiam HTML
+    const listHtml = items.map(it => `
+      <li>
+        <b>${it.idx}. ${escapeHtml(it.name)}</b>
+        ${it.desc  ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>`   : ''}
+        ${it.notes ? `<div>Pastabos: ${escapeHtml(it.notes)}</div>`  : ''}
+      </li>
+    `).join('');
+
+    const commonHtml = `
+      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45">
+        <div><b>Planas:</b> ${escapeHtml(plan)} | <b>Detalių (užpildyta):</b> ${items.length}</div>
+        <div><b>VIN:</b> ${escapeHtml(vin)} | <b>Markė:</b> ${escapeHtml(marke)} | <b>Modelis:</b> ${escapeHtml(modelis)} | <b>Metai:</b> ${escapeHtml(metai)}</div>
+        <div><b>Vardas/įmonė:</b> ${escapeHtml(vardas)} | <b>El. paštas:</b> ${escapeHtml(email)} | <b>Tel.:</b> ${escapeHtml(tel)}</div>
+        ${komentaras ? `<div><b>Komentarai:</b> ${escapeHtml(komentaras)}</div>` : ''}
+        <hr>
+        <div><b>Detalės:</b></div>
+        <ul style="margin-top:6px">${listHtml}</ul>
+      </div>
+    `;
+
+    // priedai (nuotraukos)
+    const attachments = items
+      .filter(it => it.file)
+      .map(it => ({
+        filename: it.file.originalname || `detale_${it.idx}.jpg`,
+        content: it.file.buffer,
+        contentType: it.file.mimetype || 'application/octet-stream'
+      }));
+
+    const admin = process.env.MAIL_USER || 'info@raskdali.lt';
+
+    // laiškas TAU
+    await transporter.sendMail({
+      from: `"RaskDali" <${admin}>`,
+      to: admin,
+      subject: `Užklausa (${plan}) – ${vardas || 'klientas'}`,
+      html: `<h2>Gauta nauja užklausa</h2>${commonHtml}`,
+      attachments
+    });
+
+    // laiškas KLIENTUI (jei įvedė el. paštą)
+    if (email) {
+      await transporter.sendMail({
+        from: `"RaskDali" <${admin}>`,
+        to: email,
+        subject: 'Jūsų užklausa gauta – RaskDali',
+        html: `
+          <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45">
+            <h2>Jūsų užklausa gauta 🎉</h2>
+            <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Greitu metu susisieksime.</p>
+            <p>Primename: dažniausiai pristatymas 1–14 d. (gali būti iki 30 d.).</p>
+            ${commonHtml}
+          </div>
+        `
+      });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('UZKLAUSA ERROR:', err);
+    res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' });
+  }
+});
+
+// paprasta HTML escaping helper funkcija
+function escapeHtml(str) {
+  return String(str || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 app.listen(port, () => console.log('Serveris veikia ant port ' + port));

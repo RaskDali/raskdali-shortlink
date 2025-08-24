@@ -206,31 +206,8 @@ const port = process.env.PORT || 10000;
 // ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 60 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 40 },
 });
-
-function readField(body, i, field) {
-  const candidates = [
-    `items[${i}][${field}]`,
-    `items.${i}.${field}`,
-    `items_${i}_${field}`,
-    `items${i}${field}`
-  ];
-  for (const k of candidates) {
-    if (body[k] != null) return String(body[k]).trim();
-  }
-  return '';
-}
-
-function findFile(files, i) {
-  return (files || []).find(f => {
-    const fn = f.fieldname || '';
-    return fn === `items[${i}][image]`
-        || fn === `items.${i}.image`
-        || (fn.includes(`items[${i}]`) && fn.includes('image'))
-        || (fn.includes(`items.${i}`) && fn.includes('image'));
-  });
-}
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
   try {
@@ -238,6 +215,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const marke    = (req.body.marke || '').trim();
     const modelis  = (req.body.modelis || '').trim();
     const metai    = (req.body.metai || '').trim();
+
     const komentaras = (req.body.komentaras || '').trim();
     const vardas     = (req.body.vardas || '').trim();
     const email      = (req.body.email || '').trim();
@@ -246,14 +224,17 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
+    // --- SVARBU: skaitome plokščius pavadinimus item_X_name/desc/notes/image
     const items = [];
     for (let i = 0; i < count; i++) {
-      const name  = readField(req.body, i, 'name');
-      const desc  = readField(req.body, i, 'desc');
-      const notes = readField(req.body, i, 'notes');
-      const file  = findFile(req.files, i);
+      const name  = (req.body[`item_${i}_name`]  || '').trim();
+      const desc  = (req.body[`item_${i}_desc`]  || '').trim();
+      const notes = (req.body[`item_${i}_notes`] || '').trim();
+      const file  = (req.files || []).find(f => f.fieldname === `item_${i}_image`);
 
-      if (!(name || desc || notes || file)) continue; // nieko neužpildė
+      // Įtraukiam, jei užpildytas bent VIENAS laukas arba yra failas
+      if (!(name || desc || notes || file)) continue;
+
       items.push({ idx: i + 1, name, desc, notes, file });
     }
 

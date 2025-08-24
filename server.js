@@ -229,23 +229,41 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // surenkam detales – užtenka BET KURIO lauko (name || desc || notes || file)
-    const items = [];
-    for (let i = 0; i < count; i++) {
-      const name  = (req.body[`items[${i}][name]`]  || '').trim();
-      const desc  = (req.body[`items[${i}][desc]`]  || '').trim();
-      const notes = (req.body[`items[${i}][notes]`] || '').trim();
-      const file  = (req.files || []).find(f => f.fieldname === `items[${i}][image]`);
+    // ---- SURINKTI DETALES IŠ ĮVAIRIŲ FORMATŲ ----
+// palaikomi 3 formatai: items[0][name]  |  items[0].name  |  items_0_name
+function readField(body, i, key) {
+  const k1 = `items[${i}][${key}]`;
+  const k2 = `items[${i}].${key}`;
+  const k3 = `items_${i}_${key}`;
+  return (body[k1] ?? body[k2] ?? body[k3] ?? '').toString().trim();
+}
+function findFile(files, i) {
+  const f1 = `items[${i}][image]`;
+  const f2 = `items[${i}].image`;
+  const f3 = `items_${i}_image`;
+  return (files || []).find(f => f.fieldname === f1 || f.fieldname === f2 || f.fieldname === f3);
+}
 
-      const hasAny = !!(name || desc || notes || file);
-      if (!hasAny) continue;
+const items = [];
+for (let i = 0; i < count; i++) {
+  const name  = readField(req.body, i, 'name');
+  const desc  = readField(req.body, i, 'desc');
+  const notes = readField(req.body, i, 'notes');
+  const file  = findFile(req.files, i);
 
-      items.push({ idx: i + 1, name, desc, notes, file });
-    }
+  const hasAny = !!(name || desc || notes || file);
+  if (!hasAny) continue;
 
-    if (!items.length) {
-      return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
-    }
+  items.push({ idx: i + 1, name, desc, notes, file });
+}
+
+if (!items.length) {
+  // Debug – pirmai dienai: pamatysi kas ateina
+  console.log('DEBUG body keys:', Object.keys(req.body));
+  console.log('DEBUG file fields:', (req.files || []).map(f => f.fieldname));
+  return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
+}
+
 
     // paruošiam HTML
     const listHtml = items.map(it => `

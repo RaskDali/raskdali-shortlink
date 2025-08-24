@@ -232,7 +232,9 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       const notes = (req.body[`items[${i}][notes]`] || '').trim();
       if (!name) continue;
 
-      const file = (req.files || []).find(f => f.fieldname === `items[${i}][image]`);
+      const hasAny = name || desc || notes || file;   // ← bent vienas laukas
+      if (!hasAny) continue;
+
       items.push({ idx: i + 1, name, desc, notes, file });
     }
 

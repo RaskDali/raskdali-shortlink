@@ -4,10 +4,18 @@ import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
 import multer from 'multer';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 10000;
+
+// ====== KAINOS (tik serveryje) ======
+const PRICES = {
+  Mini: 9.99,
+  Standart: 29.99,
+  Pro: 59.99,
+};
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
@@ -16,6 +24,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
@@ -32,6 +41,47 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.MAIL_USER,
     pass: process.env.MAIL_PASS,
+  }
+});
+
+// ================= Paysera: start link (redirect) =================
+// Kviesk: GET /api/paysera/start?plan=Mini&return=https://www.raskdali.lt/uzklausa-mini
+app.get('/api/paysera/start', (req, res) => {
+  try {
+    const planRaw = String(req.query.plan || '').trim();
+    const returnUrl = String(req.query.return || '').trim();
+
+    const price = PRICES[planRaw];
+    if (!price || !returnUrl) {
+      return res.status(400).send('Neteisingi parametrai.');
+    }
+
+    const amountCents = Math.round(price * 100);
+
+    const params = new URLSearchParams({
+      projectid: String(process.env.PAYSERA_PROJECTID || ''),
+      orderid: 'RD-' + Date.now(),
+      accepturl: `${returnUrl}?paid=1`,
+      cancelurl: `${returnUrl}?paid=0`,
+      callbackurl: `${req.protocol}://${req.get('host')}/paysera-callback`, // ateičiai
+      version: '1.6',
+      lang: 'LIT',
+      currency: process.env.PAYSERA_CURRENCY || 'EUR',
+      amount: String(amountCents),
+      test: '0'
+    });
+
+    const data = Buffer.from(params.toString()).toString('base64');
+    const sign = crypto
+      .createHash('md5')
+      .update(data + (process.env.PAYSERA_PASSWORD || ''), 'utf8')
+      .digest('hex');
+
+    const payUrl = `https://www.paysera.com/pay/?data=${encodeURIComponent(data)}&sign=${sign}`;
+    return res.redirect(payUrl);
+  } catch (e) {
+    console.error('Paysera start error:', e);
+    return res.status(500).send('Mokėjimo pradėti nepavyko.');
   }
 });
 
@@ -237,7 +287,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
     }
 
-    // --- Paruošiam viską laiškams (HTML + priedai)
+    // --- Paruošiam laiškus (HTML + priedai)
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
     const adminItemsHtml = items.map((it, idx) => {
       const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
@@ -293,13 +343,12 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // <<< 1) IŠ KARTO ATSAKOM KLIENTUI >>>
+    // 1) iškart atsakom klientui — nereiks laukti el. laiškų siuntimo
     res.json({ ok: true });
 
-    // <<< 2) LAIŠKUS SIUNČIAM FONE (nereikia laukti kliento pusėje) >>>
+    // 2) laiškus siųsti fone
     setImmediate(async () => {
       try {
-        // Tau (adminui)
         await transporter.sendMail({
           from: `"RaskDali" <${admin}>`,
           to: admin,
@@ -308,7 +357,6 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
           attachments
         });
 
-        // Klientui (pakeičiau tekstą į „pasiūlymą dažniausiai pateikiame per 24–48 h“)
         if (email) {
           const clientHtml = `
             ${commonTop}
@@ -341,7 +389,6 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     try { res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' }); } catch {}
   }
 });
-
 
 // paprasta HTML escaping helper funkcija
 function escapeHtml(str) {

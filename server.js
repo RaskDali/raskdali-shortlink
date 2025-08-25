@@ -4,7 +4,9 @@ import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
 import multer from 'multer';
 import dotenv from 'dotenv';
-import WebToPay from 'webtopay';               // <-- Paysera lib
+import webtopayPkg from 'webtopay';
+const WebToPay = webtopayPkg.WebToPay || webtopayPkg; // veiks tiek su default, tiek su named export
+
 
 dotenv.config();
 

@@ -7,6 +7,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
+const port = process.env.PORT || 10000;
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -142,17 +144,6 @@ app.post('/klientoats/:id/order', async (req, res) => {
       <b>Viso su PVM:</b> ${total.toFixed(2)} €<br>
       <b>Viso be PVM:</b> ${totalBe.toFixed(2)} €
     `;
-    // Laiškas klientui – GAVOME užsakymą
-    let klientuiHtml = `
-      <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
-      <p>Jūsų pasirinktos prekės:</p>
-      <ul>${detalesHtml}</ul>
-      <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
-      <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
-      <p>Jūsų užsakymą gavome. Netrukus el. paštu atsiųsime sąskaitą su apmokėjimo nuoroda.</p>
-      <br>
-      <b>RaskDali komanda</b>
-    `;
 
     try {
       // Tau (administratorius)
@@ -167,7 +158,16 @@ app.post('/klientoats/:id/order', async (req, res) => {
         from: `"RaskDali" <${process.env.MAIL_USER}>`,
         to: email,
         subject: "Jūsų užsakymas priimtas – RaskDali",
-        html: klientuiHtml
+        html: `
+          <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
+          <p>Jūsų pasirinktos prekės:</p>
+          <ul>${detalesHtml}</ul>
+          <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
+          <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
+          <p>Jūsų užsakymą gavome. Netrukus el. paštu atsiųsime sąskaitą su apmokėjimo nuoroda.</p>
+          <br>
+          <b>RaskDali komanda</b>
+        `
       });
     } catch (e) {
       console.error("Nepavyko išsiųsti el. laiško:", e);
@@ -200,10 +200,8 @@ app.post('/klientoats/:id/order', async (req, res) => {
   `);
 });
 
-const port = process.env.PORT || 10000;
-// ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
+// =================== UŽKLAUSOS FORMA (Mini/Standart/Pro) ===================
 // nuotraukas laikom atminty, ribojam po 5MB vienai
-// ===== UŽKLAUSOS FORMA (Mini/Standart/Pro) =====
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 40 },
@@ -224,17 +222,14 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // --- SVARBU: skaitome plokščius pavadinimus item_X_name/desc/notes/image
+    // tikimės "plokščių" laukų: item_0_name, item_0_desc, item_0_notes, item_0_image
     const items = [];
     for (let i = 0; i < count; i++) {
       const name  = (req.body[`item_${i}_name`]  || '').trim();
       const desc  = (req.body[`item_${i}_desc`]  || '').trim();
       const notes = (req.body[`item_${i}_notes`] || '').trim();
       const file  = (req.files || []).find(f => f.fieldname === `item_${i}_image`);
-
-      // Įtraukiam, jei užpildytas bent VIENAS laukas arba yra failas
       if (!(name || desc || notes || file)) continue;
-
       items.push({ idx: i + 1, name, desc, notes, file });
     }
 
@@ -242,7 +237,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
     }
 
-    // --- gražesnis laiško HTML su logotipu ir CID miniatiūromis (adminui)
+    // gražesnis HTML adminui
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
 
     const adminItemsHtml = items.map((it, idx) => {
@@ -292,7 +287,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       </div>
     `;
 
-    // --- pririšame inline paveikslėlius (CID), kad matytum, kuri foto kuriai detalei
+    // Inline paveikslėliai admino laiške
     const attachments = items.map((it, idx) => {
       if (!it.file) return null;
       return {
@@ -305,41 +300,51 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // Tau (admin)
-    await transporter.sendMail({
-      from: `"RaskDali" <${admin}>`,
-      to: admin,
-      subject: `Užklausa (${plan}) – ${vardas || 'klientas'}`,
-      html: adminHtml,
-      attachments
+    // 1) GRĄŽINAM ATSAKYMĄ IŠKART (be laukimo)
+    res.json({ ok: true });
+
+    // 2) Laiškus siunčiame background'e (kad vartotojas nelauktų)
+    setImmediate(async () => {
+      try {
+        // Tau (admin)
+        await transporter.sendMail({
+          from: `"RaskDali" <${admin}>`,
+          to: admin,
+          subject: `Užklausa (${plan}) – ${vardas || 'klientas'}`,
+          html: adminHtml,
+          attachments
+        });
+
+        // Klientui – atnaujintas tekstas (24–48 val.)
+        if (email) {
+          const clientHtml = `
+            ${commonTop}
+            <div style="font-family:Arial,sans-serif;font-size:14px">
+              <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
+              <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>).</p>
+              <p><b>Pasiūlymą parengiame per 24–48 val.</b> (darbo dienomis).
+                 Pristatymo terminus pateiksime pasiūlyme prie kiekvienos detalės.</p>
+              <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
+              ${items.map(it => `
+                <div style="padding:8px 0">
+                  <div><b>#${it.idx}:</b> ${escapeHtml(it.name || '(be pavadinimo)')}</div>
+                  ${it.desc ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          `;
+          await transporter.sendMail({
+            from: `"RaskDali" <${admin}>`,
+            to: email,
+            subject: 'Jūsų užklausa gauta – RaskDali',
+            html: clientHtml
+          });
+        }
+      } catch (e) {
+        console.error('Siunčiant laiškus įvyko klaida:', e);
+      }
     });
 
-    // Klientui – gražesnis patvirtinimas
-    if (email) {
-      const clientHtml = `
-        ${commonTop}
-        <div style="font-family:Arial,sans-serif;font-size:14px">
-          <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
-          <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Greitu metu susisieksime.</p>
-          <p style="margin:10px 0 0 0">Primename: dažniausiai pristatymas 1–14 d. (gali būti iki 30 d.).</p>
-          <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
-          ${items.map(it => `
-            <div style="padding:8px 0">
-              <div><b>#${it.idx}:</b> ${escapeHtml(it.name || '(be pavadinimo)')}</div>
-              ${it.desc ? `<div>Aprašymas: ${escapeHtml(it.desc)}</div>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      `;
-      await transporter.sendMail({
-        from: `"RaskDali" <${admin}>`,
-        to: email,
-        subject: 'Jūsų užklausa gauta – RaskDali',
-        html: clientHtml
-      });
-    }
-
-    res.json({ ok: true });
   } catch (err) {
     console.error('UZKLAUSA ERROR:', err);
     res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' });

@@ -222,13 +222,13 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // tikimės "plokščių" laukų: item_0_name, item_0_desc, item_0_notes, item_0_image
+    // SURINKTI DETALES (priimame abi schemas – "items[0][name]" ir "item_0_name")
     const items = [];
     for (let i = 0; i < count; i++) {
-      const name  = (req.body[`item_${i}_name`]  || '').trim();
-      const desc  = (req.body[`item_${i}_desc`]  || '').trim();
-      const notes = (req.body[`item_${i}_notes`] || '').trim();
-      const file  = (req.files || []).find(f => f.fieldname === `item_${i}_image`);
+      const name  = (req.body[`items[${i}][name]`]  || req.body[`item_${i}_name`]  || '').trim();
+      const desc  = (req.body[`items[${i}][desc]`]  || req.body[`item_${i}_desc`]  || '').trim();
+      const notes = (req.body[`items[${i}][notes]`] || req.body[`item_${i}_notes`] || '').trim();
+      const file  = (req.files || []).find(f => f.fieldname === `items[${i}][image]` || f.fieldname === `item_${i}_image`);
       if (!(name || desc || notes || file)) continue;
       items.push({ idx: i + 1, name, desc, notes, file });
     }
@@ -237,9 +237,8 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
     }
 
-    // gražesnis HTML adminui
+    // --- Paruošiam viską laiškams (HTML + priedai)
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
-
     const adminItemsHtml = items.map((it, idx) => {
       const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
       const title  = it.name ? escapeHtml(it.name) : '(be pavadinimo)';
@@ -280,14 +279,8 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       </div>
     `;
 
-    const adminHtml = `
-      ${commonTop}
-      <div style="font-family:Arial,sans-serif;font-size:14px">
-        ${adminItemsHtml}
-      </div>
-    `;
+    const adminHtml = `${commonTop}<div style="font-family:Arial,sans-serif;font-size:14px">${adminItemsHtml}</div>`;
 
-    // Inline paveikslėliai admino laiške
     const attachments = items.map((it, idx) => {
       if (!it.file) return null;
       return {
@@ -300,13 +293,13 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // 1) GRĄŽINAM ATSAKYMĄ IŠKART (be laukimo)
+    // <<< 1) IŠ KARTO ATSAKOM KLIENTUI >>>
     res.json({ ok: true });
 
-    // 2) Laiškus siunčiame background'e (kad vartotojas nelauktų)
+    // <<< 2) LAIŠKUS SIUNČIAM FONE (nereikia laukti kliento pusėje) >>>
     setImmediate(async () => {
       try {
-        // Tau (admin)
+        // Tau (adminui)
         await transporter.sendMail({
           from: `"RaskDali" <${admin}>`,
           to: admin,
@@ -315,15 +308,13 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
           attachments
         });
 
-        // Klientui – atnaujintas tekstas (24–48 val.)
+        // Klientui (pakeičiau tekstą į „pasiūlymą dažniausiai pateikiame per 24–48 h“)
         if (email) {
           const clientHtml = `
             ${commonTop}
             <div style="font-family:Arial,sans-serif;font-size:14px">
               <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
-              <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>).</p>
-              <p><b>Pasiūlymą parengiame per 24–48 val.</b> (darbo dienomis).
-                 Pristatymo terminus pateiksime pasiūlyme prie kiekvienos detalės.</p>
+              <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Dažniausiai pasiūlymą pateikiame per <b>24–48 val.</b></p>
               <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
               ${items.map(it => `
                 <div style="padding:8px 0">
@@ -340,16 +331,17 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
             html: clientHtml
           });
         }
-      } catch (e) {
-        console.error('Siunčiant laiškus įvyko klaida:', e);
+      } catch (mailErr) {
+        console.error('MAIL SEND ERROR:', mailErr);
       }
     });
 
   } catch (err) {
     console.error('UZKLAUSA ERROR:', err);
-    res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' });
+    try { res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' }); } catch {}
   }
 });
+
 
 // paprasta HTML escaping helper funkcija
 function escapeHtml(str) {

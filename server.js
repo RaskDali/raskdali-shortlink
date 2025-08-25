@@ -4,18 +4,12 @@ import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
 import multer from 'multer';
 import dotenv from 'dotenv';
-import crypto from 'crypto';
+import WebToPay from 'webtopay';               // <-- Paysera lib
+
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 10000;
-
-// ====== KAINOS (tik serveryje) ======
-const PRICES = {
-  Mini: 9.99,
-  Standart: 29.99,
-  Pro: 59.99,
-};
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
@@ -33,56 +27,12 @@ try {
   offers = JSON.parse(await fs.readFile('offers.json', 'utf8'));
 } catch (e) { offers = {}; }
 
-// ---- SMTP KONFIGŪRACIJA (Hostinger)
+// ---- SMTP (Hostinger)
 const transporter = nodemailer.createTransport({
   host: process.env.MAIL_HOST,
   port: parseInt(process.env.MAIL_PORT || "465"),
   secure: true,
-  auth: {
-    user: process.env.MAIL_USER,
-    pass: process.env.MAIL_PASS,
-  }
-});
-
-// ================= Paysera: start link (redirect) =================
-// Kviesk: GET /api/paysera/start?plan=Mini&return=https://www.raskdali.lt/uzklausa-mini
-app.get('/api/paysera/start', (req, res) => {
-  try {
-    const planRaw = String(req.query.plan || '').trim();
-    const returnUrl = String(req.query.return || '').trim();
-
-    const price = PRICES[planRaw];
-    if (!price || !returnUrl) {
-      return res.status(400).send('Neteisingi parametrai.');
-    }
-
-    const amountCents = Math.round(price * 100);
-
-    const params = new URLSearchParams({
-      projectid: String(process.env.PAYSERA_PROJECTID || ''),
-      orderid: 'RD-' + Date.now(),
-      accepturl: `${returnUrl}?paid=1`,
-      cancelurl: `${returnUrl}?paid=0`,
-      callbackurl: `${req.protocol}://${req.get('host')}/paysera-callback`, // ateičiai
-      version: '1.6',
-      lang: 'LIT',
-      currency: process.env.PAYSERA_CURRENCY || 'EUR',
-      amount: String(amountCents),
-      test: '0'
-    });
-
-    const data = Buffer.from(params.toString()).toString('base64');
-    const sign = crypto
-      .createHash('md5')
-      .update(data + (process.env.PAYSERA_PASSWORD || ''), 'utf8')
-      .digest('hex');
-
-    const payUrl = `https://www.paysera.com/pay/?data=${encodeURIComponent(data)}&sign=${sign}`;
-    return res.redirect(payUrl);
-  } catch (e) {
-    console.error('Paysera start error:', e);
-    return res.status(500).send('Mokėjimo pradėti nepavyko.');
-  }
+  auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS }
 });
 
 // ---- Naujo pasiūlymo sukūrimas
@@ -94,7 +44,7 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
   res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
 });
 
-// ---- Kliento puslapis
+// ---- Kliento puslapis su užsakymu
 app.get('/klientoats/:id', (req, res) => {
   const offer = offers[req.params.id];
   if (!offer) return res.status(404).send('Pasiūlymas nerastas');
@@ -139,9 +89,7 @@ app.get('/klientoats/:id', (req, res) => {
             <div class="item">
               <b>${item.pozNr ? `${item.pozNr}. ` : ""}${item.name || ''}</b>
               ${item.type ? `<span style="color:#4066B2; font-size:0.92em; margin-left:8px;">(${item.type})</span>` : ""}
-              <div>
-                ${item.imgSrc ? `<img src="${item.imgSrc}" class="img-preview">` : ""}
-              </div>
+              <div>${item.imgSrc ? `<img src="${item.imgSrc}" class="img-preview">` : ""}</div>
               ${item.desc ? `<div><i>${item.desc}</i></div>` : ""}
               ${item.eta ? `<div>Pristatymas: <b>${item.eta}</b></div>` : ""}
               <div style="margin-top:4px;">
@@ -178,7 +126,6 @@ app.post('/klientoats/:id/order', async (req, res) => {
     totalBe += parseFloat((item?.["price-novat"] || "0").replace(',', '.'));
   });
 
-  // Laiškas tau
   if (email && pasirinktosPrekes.length) {
     let detalesHtml = pasirinktosPrekes.map(item => `
       <li><b>${item.pozNr ? `${item.pozNr}. ` : ''}${item.name || ''}</b> 
@@ -194,37 +141,32 @@ app.post('/klientoats/:id/order', async (req, res) => {
       <b>Viso su PVM:</b> ${total.toFixed(2)} €<br>
       <b>Viso be PVM:</b> ${totalBe.toFixed(2)} €
     `;
+    let klientuiHtml = `
+      <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
+      <p>Jūsų pasirinktos prekės:</p>
+      <ul>${detalesHtml}</ul>
+      <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
+      <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
+      <p>Jūsų užsakymą gavome. Netrukus el. paštu atsiųsime sąskaitą su apmokėjimo nuoroda.</p>
+      <br><b>RaskDali komanda</b>
+    `;
 
     try {
-      // Tau (administratorius)
       await transporter.sendMail({
         from: `"RaskDali" <${process.env.MAIL_USER}>`,
         to: process.env.MAIL_USER,
         subject: "Naujas detalių užsakymas iš RaskDali",
         html: uzsakymasHtml
       });
-      // Klientui
       await transporter.sendMail({
         from: `"RaskDali" <${process.env.MAIL_USER}>`,
         to: email,
         subject: "Jūsų užsakymas priimtas – RaskDali",
-        html: `
-          <h2>Ačiū, Jūsų užsakymas priimtas!</h2>
-          <p>Jūsų pasirinktos prekės:</p>
-          <ul>${detalesHtml}</ul>
-          <div>Viso su PVM: <b>${total.toFixed(2)} €</b></div>
-          <div>Viso be PVM: <b>${totalBe.toFixed(2)} €</b></div>
-          <p>Jūsų užsakymą gavome. Netrukus el. paštu atsiųsime sąskaitą su apmokėjimo nuoroda.</p>
-          <br>
-          <b>RaskDali komanda</b>
-        `
+        html: klientuiHtml
       });
-    } catch (e) {
-      console.error("Nepavyko išsiųsti el. laiško:", e);
-    }
+    } catch (e) { console.error("Nepavyko išsiųsti el. laiško:", e); }
   }
 
-  // Atsakymas klientui naršyklėje
   res.send(`
     <html>
     <head>
@@ -250,12 +192,8 @@ app.post('/klientoats/:id/order', async (req, res) => {
   `);
 });
 
-// =================== UŽKLAUSOS FORMA (Mini/Standart/Pro) ===================
-// nuotraukas laikom atminty, ribojam po 5MB vienai
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 40 },
-});
+// ====== UŽKLAUSOS FORMA ======
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 40 } });
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
   try {
@@ -272,7 +210,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // SURINKTI DETALES (priimame abi schemas – "items[0][name]" ir "item_0_name")
+    // priimam abi schemas: items[i] arba item_i_*
     const items = [];
     for (let i = 0; i < count; i++) {
       const name  = (req.body[`items[${i}][name]`]  || req.body[`item_${i}_name`]  || '').trim();
@@ -283,11 +221,8 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       items.push({ idx: i + 1, name, desc, notes, file });
     }
 
-    if (!items.length) {
-      return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
-    }
+    if (!items.length) return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
 
-    // --- Paruošiam laiškus (HTML + priedai)
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
     const adminItemsHtml = items.map((it, idx) => {
       const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
@@ -304,26 +239,12 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const commonTop = `
       <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
-        <tr><td style="padding:16px 0">
-          <img src="${logoUrl}" alt="RaskDali" style="height:26px">
-        </td></tr>
+        <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="RaskDali" style="height:26px"></td></tr>
       </table>
       <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">
-        <p style="margin:0 0 12px 0">
-          <b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; 
-          <b>Detalių (užpildyta):</b> ${items.length}
-        </p>
-        <p style="margin:0 0 12px 0">
-          <b>VIN:</b> ${escapeHtml(vin)} &nbsp;|&nbsp; 
-          <b>Markė:</b> ${escapeHtml(marke)} &nbsp;|&nbsp; 
-          <b>Modelis:</b> ${escapeHtml(modelis)} &nbsp;|&nbsp; 
-          <b>Metai:</b> ${escapeHtml(metai)}
-        </p>
-        <p style="margin:0 0 12px 0">
-          <b>Vardas/įmonė:</b> ${escapeHtml(vardas)} &nbsp;|&nbsp; 
-          <b>El. paštas:</b> ${escapeHtml(email)} &nbsp;|&nbsp; 
-          <b>Tel.:</b> ${escapeHtml(tel)}
-        </p>
+        <p style="margin:0 0 12px 0"><b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; <b>Detalių (užpildyta):</b> ${items.length}</p>
+        <p style="margin:0 0 12px 0"><b>VIN:</b> ${escapeHtml(vin)} &nbsp;|&nbsp; <b>Markė:</b> ${escapeHtml(marke)} &nbsp;|&nbsp; <b>Modelis:</b> ${escapeHtml(modelis)} &nbsp;|&nbsp; <b>Metai:</b> ${escapeHtml(metai)}</p>
+        <p style="margin:0 0 12px 0"><b>Vardas/įmonė:</b> ${escapeHtml(vardas)} &nbsp;|&nbsp; <b>El. paštas:</b> ${escapeHtml(email)} &nbsp;|&nbsp; <b>Tel.:</b> ${escapeHtml(tel)}</p>
         ${komentaras ? `<p style="margin:0 0 12px 0"><b>Komentarai:</b> ${escapeHtml(komentaras)}</p>` : ''}
         <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
       </div>
@@ -343,10 +264,8 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // 1) iškart atsakom klientui — nereiks laukti el. laiškų siuntimo
-    res.json({ ok: true });
+    res.json({ ok: true });             // <- klientui atsakom nedelsiant (neblokuojam)
 
-    // 2) laiškus siųsti fone
     setImmediate(async () => {
       try {
         await transporter.sendMail({
@@ -390,13 +309,67 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
   }
 });
 
-// paprasta HTML escaping helper funkcija
+// ===== Paysera: START (gražinam JSON su pay_url) =====
+app.get('/api/paysera/start', async (req, res) => {
+  try {
+    const plan = (req.query.plan || 'Mini').toString();
+    const returnUrl = (req.query.return || '').toString() || 'https://www.raskdali.lt/uzklausa-mini';
+
+    // planų kainos (centais!)
+    const AMOUNTS = { Mini: 799, Standart: 1499, Pro: 2499 }; // keisk kaip reikia
+    const amountCents = AMOUNTS[plan] ?? AMOUNTS['Mini'];
+
+    const accept = new URL(returnUrl); accept.searchParams.set('paid', '1');
+    const cancel = new URL(returnUrl); cancel.searchParams.set('paid', '0');
+
+    // Sukuriam pasirašytus parametrus per biblioteką
+    const params = WebToPay.buildRequest({
+      projectid: Number(process.env.PAYSERA_PROJECT_ID),
+      sign_password: process.env.PAYSERA_PASSWORD,
+      orderid: nanoid(),
+      amount: amountCents,
+      currency: 'EUR',
+      accepturl: accept.toString(),
+      cancelurl: cancel.toString(),
+      callbackurl: `${process.env.PUBLIC_API_HOST}/api/paysera/callback`,
+      test: process.env.PAYSERA_TEST === '1' ? 1 : 0,
+    });
+
+    // Paysera apmokėjimo URL
+    const query = new URLSearchParams(params).toString();
+    const payUrl = `https://bank.paysera.com/pay/?${query}`;
+
+    res.json({ pay_url: payUrl });
+  } catch (e) {
+    console.error('PAYSERA START ERROR:', e);
+    res.status(400).json({ error: 'Negalime paruošti apmokėjimo.' });
+  }
+});
+
+// ===== Paysera: CALLBACK (patvirtinimas iš Paysera) =====
+app.post('/api/paysera/callback', express.urlencoded({ extended: false }), (req, res) => {
+  try {
+    // Patikrinam atsakymą (parašus ir t. t.)
+    const _ = WebToPay.checkResponse(req.body, {
+      projectid: Number(process.env.PAYSERA_PROJECT_ID),
+      sign_password: process.env.PAYSERA_PASSWORD
+    });
+
+    // Čia gali pasižymėti DB, kad apmokėta (req.body.* laukeliai bus)
+    // pvz.: const orderId = req.body['orderid'];
+
+    res.send('OK'); // Paysera turi gauti "OK"
+  } catch (e) {
+    console.error('PAYSERA CALLBACK ERROR:', e);
+    res.status(400).send('ERROR');
+  }
+});
+
+// helper
 function escapeHtml(str) {
   return String(str || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
 

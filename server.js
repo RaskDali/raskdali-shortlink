@@ -11,7 +11,7 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 10000;
 
-/* -------------------- Middleware -------------------- */
+/* ---------- Middleware ---------- */
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use((req, res, next) => {
@@ -22,15 +22,11 @@ app.use((req, res, next) => {
   next();
 });
 
-/* -------------------- Pasiūlymų atmintis -------------------- */
+/* ---------- Paprasta „DB“ ---------- */
 let offers = {};
-try {
-  offers = JSON.parse(await fs.readFile('offers.json', 'utf8'));
-} catch {
-  offers = {};
-}
+try { offers = JSON.parse(await fs.readFile('offers.json', 'utf8')); } catch { offers = {}; }
 
-/* -------------------- SMTP (Hostinger) -------------------- */
+/* ---------- SMTP ---------- */
 const transporter = nodemailer.createTransport({
   host: process.env.MAIL_HOST,
   port: parseInt(process.env.MAIL_PORT || '465', 10),
@@ -38,22 +34,18 @@ const transporter = nodemailer.createTransport({
   auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS }
 });
 
-/* -------------------- Helperiai -------------------- */
+/* ---------- Helperiai ---------- */
 function escapeHtml(str) {
   return String(str || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
-
 function buildQuery(obj) {
   return Object.entries(obj).map(([k, v]) =>
     `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`
   ).join('&');
 }
-
 function buildPayseraRequest(rawParams, projectId, signPassword) {
   const params = { version: 1, projectid: Number(projectId), ...rawParams };
   const q = buildQuery(params);
@@ -61,46 +53,40 @@ function buildPayseraRequest(rawParams, projectId, signPassword) {
   const sign = crypto.createHash('md5').update(data + signPassword).digest('hex');
   return { data, sign };
 }
-
 function verifyPayseraResponse(data, sign, signPassword) {
   const calc = crypto.createHash('md5').update(data + signPassword).digest('hex');
   return calc === (sign || '').toLowerCase();
 }
-
 function parsePayseraData(dataB64) {
   const decoded = Buffer.from(dataB64, 'base64').toString('utf8');
   return Object.fromEntries(new URLSearchParams(decoded));
 }
-
 function normalizeReturnUrl(plan, rawReturn) {
-  const SITE_BASE = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
+  const SITE = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
   const defaults = {
-    Mini:     `${SITE_BASE}/uzklausa-mini`,
-    Standart: `${SITE_BASE}/uzklausa-standart`,
-    Pro:      `${SITE_BASE}/uzklausa-pro`,
+    Mini:     `${SITE}/uzklausa-mini`,
+    Standart: `${SITE}/uzklausa-standart`,
+    Pro:      `${SITE}/uzklausa-pro`,
   };
   const fallback = defaults[plan] || defaults.Mini;
-
-  if (typeof rawReturn !== 'string' || !rawReturn) return fallback;
+  if (!rawReturn || typeof rawReturn !== 'string') return fallback;
   if (/^https?:\/\//i.test(rawReturn)) return rawReturn;
-  if (rawReturn.startsWith('/')) return SITE_BASE + rawReturn;
+  if (rawReturn.startsWith('/')) return SITE + rawReturn;
   return fallback;
 }
 
-/* ============================================================
-   API: UŽKLAUSA  → el. laiškai adminui ir klientui
-   ============================================================ */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 40 }
-});
+/* =========================================================
+   API: UŽKLAUSA → laiškai adminui ir klientui
+   ========================================================= */
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 40 } });
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
   try {
-    const vin      = (req.body.vin || '').trim();
-    const marke    = (req.body.marke || '').trim();
-    const modelis  = (req.body.modelis || '').trim();
-    const metai    = (req.body.metai || '').trim();
+    const vin   = (req.body.vin || '').trim();
+    const marke = (req.body.marke || '').trim();
+    const modelis = (req.body.modelis || '').trim();
+    const metai = (req.body.metai || '').trim();
+
     const komentaras = (req.body.komentaras || '').trim();
     const vardas     = (req.body.vardas || '').trim();
     const email      = (req.body.email || '').trim();
@@ -118,12 +104,10 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       if (!(name || desc || notes || file)) continue;
       items.push({ idx: i + 1, name, desc, notes, file });
     }
-
     if (!items.length) return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
 
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
-
-    const bodyTop = `
+    const top = `
       <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
         <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="RaskDali" style="height:26px"></td></tr>
       </table>
@@ -135,19 +119,18 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
         <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
       </div>`;
 
-    const adminItemsHtml = items.map((it, idx) => {
-      const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
-      const title  = it.name ? escapeHtml(it.name) : '(be pavadinimo)';
-      return `
-        <div style="padding:10px 12px;border:1px solid #eee;border-radius:10px;margin:8px 0">
-          <div style="font-weight:600">#${it.idx}: ${title}</div>
-          ${it.desc  ? `<div><b>Aprašymas:</b> ${escapeHtml(it.desc)}</div>` : ''}
-          ${it.notes ? `<div><b>Pastabos:</b> ${escapeHtml(it.notes)}</div>` : ''}
-          ${imgTag}
-        </div>`;
+    const adminItems = items.map((it, idx) => {
+      const img = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
+      const title = it.name ? escapeHtml(it.name) : '(be pavadinimo)';
+      return `<div style="padding:10px 12px;border:1px solid #eee;border-radius:10px;margin:8px 0">
+        <div style="font-weight:600">#${it.idx}: ${title}</div>
+        ${it.desc ? `<div><b>Aprašymas:</b> ${escapeHtml(it.desc)}</div>` : ''}
+        ${it.notes ? `<div><b>Pastabos:</b> ${escapeHtml(it.notes)}</div>` : ''}
+        ${img}
+      </div>`;
     }).join('');
 
-    const adminHtml = `${bodyTop}<div style="font-family:Arial,sans-serif;font-size:14px">${adminItemsHtml}</div>`;
+    const adminHtml = `${top}<div style="font-family:Arial,sans-serif;font-size:14px">${adminItems}</div>`;
 
     const attachments = items.map((it, idx) => it.file ? ({
       filename: it.file.originalname || `detale_${it.idx}.jpg`,
@@ -156,17 +139,16 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
       cid: `item${idx}_cid`
     }) : null).filter(Boolean);
 
-    const adminEmail = process.env.MAIL_USER || 'info@raskdali.lt';
+    const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // Atsakymas frontui tuoj pat
+    // Atsakome klientui iškart (neblokuojam)
     res.json({ ok: true });
 
-    // Laiškai fone
     setImmediate(async () => {
       try {
         await transporter.sendMail({
-          from: `"RaskDali" <${adminEmail}>`,
-          to: adminEmail,
+          from: `"RaskDali" <${admin}>`,
+          to: admin,
           subject: `Užklausa (${plan}) – ${vardas || 'klientas'}`,
           html: adminHtml,
           attachments
@@ -174,13 +156,13 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
         if (email) {
           const clientHtml = `
-            ${bodyTop}
+            ${top}
             <div style="font-family:Arial,sans-serif;font-size:14px">
               <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
               <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Dažniausiai pasiūlymą pateikiame per <b>24–48 val.</b></p>
             </div>`;
           await transporter.sendMail({
-            from: `"RaskDali" <${adminEmail}>`,
+            from: `"RaskDali" <${admin}>`,
             to: email,
             subject: 'Jūsų užklausa gauta – RaskDali',
             html: clientHtml
@@ -196,37 +178,32 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
   }
 });
 
-/* ============================================================
-   API: Paysera START + CALLBACK
-   ============================================================ */
+/* =========================================================
+   Paysera: START + CALLBACK + FINISH (nauja)
+   ========================================================= */
 
-// START: sugrąžinam Paysera apmokėjimo URL
+// Paysera START → grąžinam pay_url
 app.get('/api/paysera/start', async (req, res) => {
   try {
     const plan = (req.query.plan || 'Mini').toString();
     const rawReturn = (req.query.return || '').toString();
-    const baseReturn = normalizeReturnUrl(plan, rawReturn);
+    const returnUrl = normalizeReturnUrl(plan, rawReturn);
 
     const AMOUNTS = { Mini: 99, Standart: 1499, Pro: 2499 }; // centais
-    const amountCents = AMOUNTS[plan] ?? AMOUNTS.Mini;
+    const amount = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
-    // Įdedam žymę ir į query, ir į hash
-    const accept = new URL(baseReturn);
-    accept.searchParams.set('paid', '1');
-    accept.hash = 'paid=1';
+    const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/, '');
 
-    const cancel = new URL(baseReturn);
-    cancel.searchParams.set('paid', '0');
-    cancel.hash = 'paid=0';
-
-    const apiHost = (process.env.PUBLIC_API_HOST || '').replace(/\/+$/, '') || 'https://raskdali-shortlink.onrender.com';
+    // Vietoj ?paid — mūsų tarpiniam puslapiui.
+    const accepturl = `${apiHost}/paysera/finish?ok=1&return=${encodeURIComponent(returnUrl)}`;
+    const cancelurl = `${apiHost}/paysera/finish?ok=0&return=${encodeURIComponent(returnUrl)}`;
 
     const { data, sign } = buildPayseraRequest({
       orderid: nanoid(),
-      amount: amountCents,
+      amount,
       currency: process.env.PAYSERA_CURRENCY || 'EUR',
-      accepturl: accept.toString(),
-      cancelurl: cancel.toString(),
+      accepturl,
+      cancelurl,
       callbackurl: `${apiHost}/api/paysera/callback`,
       test: process.env.PAYSERA_TEST === '1' ? 1 : 0
     }, process.env.PAYSERA_PROJECT_ID, process.env.PAYSERA_PASSWORD);
@@ -238,19 +215,17 @@ app.get('/api/paysera/start', async (req, res) => {
   }
 });
 
-// CALLBACK: patikrinam parašą
+// Paysera CALLBACK (parašo patikrinimas)
 app.post('/api/paysera/callback', express.urlencoded({ extended: false }), (req, res) => {
   try {
     const { data, sign } = req.body || {};
     if (!data || !sign) return res.status(400).send('ERROR');
-
     if (!verifyPayseraResponse(data, sign, process.env.PAYSERA_PASSWORD)) {
       console.error('PAYSERA CALLBACK: sign mismatch');
       return res.status(400).send('ERROR');
     }
-
     const payload = parsePayseraData(data);
-    console.log('PAYSERA OK:', payload); // čia, jei reikia, pasižymėk DB
+    console.log('PAYSERA OK:', payload);
     res.send('OK');
   } catch (e) {
     console.error('PAYSERA CALLBACK ERROR:', e);
@@ -258,11 +233,30 @@ app.post('/api/paysera/callback', express.urlencoded({ extended: false }), (req,
   }
 });
 
-/* ============================================================
-   Pasiūlymo peržiūra (nuotraukos rodomos)
-   ============================================================ */
+// NAUJAS: Paysera FINISH (tarpinis puslapis)
+app.get('/paysera/finish', (req, res) => {
+  const ok = req.query.ok === '1' ? '1' : '0';
+  const back = (req.query.return || '/').toString();
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<meta charset="utf-8">
+<title>Grįžtame...</title>
+<script>
+  try {
+    sessionStorage.setItem('rqPaid', '${ok}');
+  } catch (e) {}
+  location.replace(${JSON.stringify(back)});
+</script>
+<body style="font-family:system-ui,Arial;padding:20px">
+Grąžiname į svetainę...
+</body>`);
+});
+
+/* =========================================================
+   Pasiūlymo peržiūra (su imgSrc)
+   ========================================================= */
 app.post('/api/sukurti-pasiulyma', async (req, res) => {
-  const data = req.body; // { items: [...] (gal su imgSrc) }
+  const data = req.body;
   const id = nanoid(6);
   offers[id] = data;
   await fs.writeFile('offers.json', JSON.stringify(offers, null, 2));
@@ -276,7 +270,7 @@ app.get('/klientoats/:id', (req, res) => {
 <html><head><meta charset="utf-8"><title>Detalių pasiūlymas</title>
 <style>
   body{font-family:Arial, sans-serif;background:#f9f9f9;margin:0}
-  .wrap{max-width:760px;margin:24px auto;background:#fff;border-radius:12px;padding:24px 28px;box-shadow:0 2px 24px #00000012}
+  .wrap{max-width:760px;margin:24px auto;background:#fff;border-radius:12px;padding:24px 28px;box-shadow:0 2px 24px #0001}
   .item{border-bottom:1px solid #e5e7eb;padding:14px 0}
   .item:last-child{border-bottom:none}
   .img{margin-top:6px}
@@ -296,9 +290,7 @@ app.get('/klientoats/:id', (req, res) => {
         ${item.desc ? `<div><i>${item.desc}</i></div>` : ''}
         ${item.eta ? `<div>Pristatymas: <b>${item.eta}</b></div>` : ''}
         <div>Kaina: <b>${item['price-vat'] || ''}€</b> ${item['price-novat'] ? `(be PVM ${item['price-novat']}€)` : ''}</div>
-        <div class="img">
-          ${item.imgSrc ? `<img src="${item.imgSrc}" loading="lazy" alt="" referrerpolicy="no-referrer">` : ''}
-        </div>
+        <div class="img">${item.imgSrc ? `<img src="${item.imgSrc}" loading="lazy" alt="" referrerpolicy="no-referrer">` : ''}</div>
         <label><input type="checkbox" name="choose" value="${i}"> Užsakyti šią detalę</label>
       </div>
     `).join('')}
@@ -312,5 +304,5 @@ app.post('/klientoats/:id/order', (req, res) => {
   res.send('<meta charset="utf-8"><h2>Užsakymas priimtas</h2>');
 });
 
-/* -------------------- Start -------------------- */
+/* ---------- start ---------- */
 app.listen(port, () => console.log('Serveris veikia ant port ' + port));

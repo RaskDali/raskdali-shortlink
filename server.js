@@ -365,7 +365,7 @@ app.get('/api/paysera/start', async (req, res) => {
     const baseReturn = normalizeReturnUrl(plan, rawReturn);
 
     // kainos centais
-    const AMOUNTS = { Mini: 799, Standart: 1499, Pro: 2499 };
+    const AMOUNTS = { Mini: 99, Standart: 1499, Pro: 2499 };
     const amountCents = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
     const accept = new URL(baseReturn); accept.searchParams.set('paid', '1');

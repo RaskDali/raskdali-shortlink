@@ -4,9 +4,7 @@ import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
 import multer from 'multer';
 import dotenv from 'dotenv';
-import webtopayPkg from 'webtopay';
-const WebToPay = webtopayPkg.WebToPay || webtopayPkg; // veiks tiek su default, tiek su named export
-
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -194,7 +192,7 @@ app.post('/klientoats/:id/order', async (req, res) => {
   `);
 });
 
-// ====== UŽKLAUSOS FORMA ======
+// =================== UŽKLAUSOS FORMA ===================
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 40 } });
 
 app.post('/api/uzklausa', upload.any(), async (req, res) => {
@@ -266,7 +264,7 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
 
     const admin = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    res.json({ ok: true });             // <- klientui atsakom nedelsiant (neblokuojam)
+    res.json({ ok: true }); // klientui atsakom nedelsiant
 
     setImmediate(async () => {
       try {
@@ -311,36 +309,67 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
   }
 });
 
-// ===== Paysera: START (gražinam JSON su pay_url) =====
+
+// =======================================================
+// Paysera – savadarbis parašas (be išorinių paketų)
+// =======================================================
+
+function buildQuery(obj) {
+  return Object.entries(obj)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('&');
+}
+
+function buildPayseraRequest(rawParams, projectId, signPassword) {
+  const params = {
+    version: 1,
+    projectid: Number(projectId),
+    ...rawParams,
+  };
+  const query = buildQuery(params);
+  const data = Buffer.from(query).toString('base64');
+  const sign = crypto.createHash('md5').update(data + signPassword).digest('hex');
+  return { data, sign };
+}
+
+function verifyPayseraResponse(data, sign, signPassword) {
+  const calc = crypto.createHash('md5').update(data + signPassword).digest('hex');
+  return calc === (sign || '').toLowerCase();
+}
+
+function parsePayseraData(dataB64) {
+  const decoded = Buffer.from(dataB64, 'base64').toString('utf8');
+  return Object.fromEntries(new URLSearchParams(decoded));
+}
+
+// ===== Paysera: START (grąžina JSON su pay_url) =====
 app.get('/api/paysera/start', async (req, res) => {
   try {
     const plan = (req.query.plan || 'Mini').toString();
     const returnUrl = (req.query.return || '').toString() || 'https://www.raskdali.lt/uzklausa-mini';
 
-    // planų kainos (centais!)
-    const AMOUNTS = { Mini: 799, Standart: 1499, Pro: 2499 }; // keisk kaip reikia
-    const amountCents = AMOUNTS[plan] ?? AMOUNTS['Mini'];
+    // kainos centais
+    const AMOUNTS = { Mini: 799, Standart: 1499, Pro: 2499 };
+    const amountCents = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
     const accept = new URL(returnUrl); accept.searchParams.set('paid', '1');
     const cancel = new URL(returnUrl); cancel.searchParams.set('paid', '0');
 
-    // Sukuriam pasirašytus parametrus per biblioteką
-    const params = WebToPay.buildRequest({
-      projectid: Number(process.env.PAYSERA_PROJECT_ID),
-      sign_password: process.env.PAYSERA_PASSWORD,
-      orderid: nanoid(),
-      amount: amountCents,
-      currency: 'EUR',
-      accepturl: accept.toString(),
-      cancelurl: cancel.toString(),
-      callbackurl: `${process.env.PUBLIC_API_HOST}/api/paysera/callback`,
-      test: process.env.PAYSERA_TEST === '1' ? 1 : 0,
-    });
+    const { data, sign } = buildPayseraRequest(
+      {
+        orderid: nanoid(),
+        amount: amountCents,
+        currency: process.env.PAYSERA_CURRENCY || 'EUR',
+        accepturl: accept.toString(),
+        cancelurl: cancel.toString(),
+        callbackurl: `${process.env.PUBLIC_API_HOST}/api/paysera/callback`,
+        test: process.env.PAYSERA_TEST === '1' ? 1 : 0,
+      },
+      process.env.PAYSERA_PROJECT_ID,
+      process.env.PAYSERA_PASSWORD
+    );
 
-    // Paysera apmokėjimo URL
-    const query = new URLSearchParams(params).toString();
-    const payUrl = `https://bank.paysera.com/pay/?${query}`;
-
+    const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(data)}&sign=${sign}`;
     res.json({ pay_url: payUrl });
   } catch (e) {
     console.error('PAYSERA START ERROR:', e);
@@ -351,14 +380,17 @@ app.get('/api/paysera/start', async (req, res) => {
 // ===== Paysera: CALLBACK (patvirtinimas iš Paysera) =====
 app.post('/api/paysera/callback', express.urlencoded({ extended: false }), (req, res) => {
   try {
-    // Patikrinam atsakymą (parašus ir t. t.)
-    const _ = WebToPay.checkResponse(req.body, {
-      projectid: Number(process.env.PAYSERA_PROJECT_ID),
-      sign_password: process.env.PAYSERA_PASSWORD
-    });
+    const { data, sign } = req.body || {};
+    if (!data || !sign) return res.status(400).send('ERROR');
 
-    // Čia gali pasižymėti DB, kad apmokėta (req.body.* laukeliai bus)
-    // pvz.: const orderId = req.body['orderid'];
+    if (!verifyPayseraResponse(data, sign, process.env.PAYSERA_PASSWORD)) {
+      console.error('PAYSERA CALLBACK: sign mismatch');
+      return res.status(400).send('ERROR');
+    }
+
+    const payload = parsePayseraData(data);
+    // čia – pasižymėk DB, kad apmokėta (pvz. payload.orderid, status ir t. t.)
+    console.log('PAYSERA OK:', payload);
 
     res.send('OK'); // Paysera turi gauti "OK"
   } catch (e) {

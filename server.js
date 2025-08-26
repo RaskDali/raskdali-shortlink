@@ -30,7 +30,7 @@ try {
 // ---- SMTP (Hostinger)
 const transporter = nodemailer.createTransport({
   host: process.env.MAIL_HOST,
-  port: parseInt(process.env.MAIL_PORT || "465"),
+  port: parseInt(process.env.MAIL_PORT || "465", 10),
   secure: true,
   auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS }
 });
@@ -210,7 +210,6 @@ app.post('/api/uzklausa', upload.any(), async (req, res) => {
     const plan  = (req.body.plan || 'Nežinomas').trim();
     const count = Math.max(1, parseInt(req.body.count || '5', 10));
 
-    // priimam abi schemas: items[i] arba item_i_*
     const items = [];
     for (let i = 0; i < count; i++) {
       const name  = (req.body[`items[${i}][name]`]  || req.body[`item_${i}_name`]  || '').trim();
@@ -342,18 +341,37 @@ function parsePayseraData(dataB64) {
   return Object.fromEntries(new URLSearchParams(decoded));
 }
 
+// --- Pagalbinė: normalizuojam return URL
+function normalizeReturnUrl(plan, rawReturn) {
+  const SITE_BASE = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/,'');
+  const defaults = {
+    Mini:     `${SITE_BASE}/uzklausa-mini`,
+    Standart: `${SITE_BASE}/uzklausa-standart`,
+    Pro:      `${SITE_BASE}/uzklausa-pro`,
+  };
+  const fallback = defaults[plan] || defaults.Mini;
+
+  if (typeof rawReturn !== 'string' || !rawReturn) return fallback;
+  if (/^https?:\/\//i.test(rawReturn)) return rawReturn;
+  if (rawReturn.startsWith('/')) return SITE_BASE + rawReturn;
+  return fallback;
+}
+
 // ===== Paysera: START (grąžina JSON su pay_url) =====
 app.get('/api/paysera/start', async (req, res) => {
   try {
     const plan = (req.query.plan || 'Mini').toString();
-    const returnUrl = (req.query.return || '').toString() || 'https://www.raskdali.lt/uzklausa-mini';
+    const rawReturn = (req.query.return || '').toString();
+    const baseReturn = normalizeReturnUrl(plan, rawReturn);
 
     // kainos centais
     const AMOUNTS = { Mini: 799, Standart: 1499, Pro: 2499 };
     const amountCents = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
-    const accept = new URL(returnUrl); accept.searchParams.set('paid', '1');
-    const cancel = new URL(returnUrl); cancel.searchParams.set('paid', '0');
+    const accept = new URL(baseReturn); accept.searchParams.set('paid', '1');
+    const cancel = new URL(baseReturn); cancel.searchParams.set('paid', '0');
+
+    const callbackHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/,'');
 
     const { data, sign } = buildPayseraRequest(
       {
@@ -362,7 +380,7 @@ app.get('/api/paysera/start', async (req, res) => {
         currency: process.env.PAYSERA_CURRENCY || 'EUR',
         accepturl: accept.toString(),
         cancelurl: cancel.toString(),
-        callbackurl: `${process.env.PUBLIC_API_HOST}/api/paysera/callback`,
+        callbackurl: `${callbackHost}/api/paysera/callback`,
         test: process.env.PAYSERA_TEST === '1' ? 1 : 0,
       },
       process.env.PAYSERA_PROJECT_ID,

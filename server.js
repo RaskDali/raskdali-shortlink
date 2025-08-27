@@ -281,6 +281,114 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
 });
 
 /* =======================================================
+   1.5) NEMOKAMAS PLANAS — tiesioginis el. laiškų siuntimas (be Payseros)
+   ======================================================= */
+app.post('/api/uzklausa-free', upload.any(), async (req, res) => {
+  try {
+    const plan  = (req.body.plan || 'Nemokama').trim();
+    const vin   = (req.body.vin || '').trim();
+    const marke = (req.body.marke || '').trim();
+    const modelis = (req.body.modelis || '').trim();
+    const metai = (req.body.metai || '').trim();
+
+    const komentaras = (req.body.komentaras || '').trim();
+    const vardas     = (req.body.vardas || '').trim();
+    const email      = (req.body.email || '').trim();
+    const tel        = (req.body.tel || '').trim();
+
+    const count = Math.max(1, parseInt(req.body.count || '2', 10));
+
+    // surenkam detales (tiesiogiai iš req.body + req.files)
+    const items = [];
+    for (let i = 0; i < count; i++) {
+      const name  = (req.body[`items[${i}][name]`]  || req.body[`item_${i}_name`]  || '').trim();
+      const desc  = (req.body[`items[${i}][desc]`]  || req.body[`item_${i}_desc`]  || '').trim();
+      const notes = (req.body[`items[${i}][notes]`] || req.body[`item_${i}_notes`] || '').trim();
+      const file  = (req.files || []).find(f => f.fieldname === `items[${i}][image]` || f.fieldname === `item_${i}_image`);
+      if (!(name || desc || notes || file)) continue;
+      items.push({ idx: i + 1, name, desc, notes, file });
+    }
+
+    if (!items.length) {
+      return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
+    }
+
+    const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
+    const top = `
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
+        <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="RaskDali" style="height:26px"></td></tr>
+      </table>
+      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">
+        <p style="margin:0 0 12px 0"><b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; <b>Detalių (užpildyta):</b> ${items.length}</p>
+        <p style="margin:0 0 12px 0"><b>VIN:</b> ${escapeHtml(vin)} &nbsp;|&nbsp; <b>Markė:</b> ${escapeHtml(marke)} &nbsp;|&nbsp; <b>Modelis:</b> ${escapeHtml(modelis)} &nbsp;|&nbsp; <b>Metai:</b> ${escapeHtml(metai)}</p>
+        <p style="margin:0 0 12px 0"><b>Vardas/įmonė:</b> ${escapeHtml(vardas)} &nbsp;|&nbsp; <b>El. paštas:</b> ${escapeHtml(email)} &nbsp;|&nbsp; <b>Tel.:</b> ${escapeHtml(tel)}</p>
+        ${komentaras ? `<p style="margin:0 0 12px 0"><b>Komentarai:</b> ${escapeHtml(komentaras)}</p>` : ''}
+        <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
+      </div>`;
+
+    const adminItemsHtml = items.map((it, idx) => {
+      const imgTag = it.file ? `<div style="margin-top:6px"><img src="cid:item${idx}_cid" style="max-width:320px;border:1px solid #eee;border-radius:6px"></div>` : '';
+      const title  = it.name ? escapeHtml(it.name) : '(be pavadinimo)';
+      return `
+        <div style="padding:10px 12px;border:1px solid #eee;border-radius:10px;margin:8px 0">
+          <div style="font-weight:600">#${it.idx}: ${title}</div>
+          ${it.desc  ? `<div><b>Aprašymas:</b> ${escapeHtml(it.desc)}</div>` : ''}
+          ${it.notes ? `<div><b>Pastabos:</b> ${escapeHtml(it.notes)}</div>` : ''}
+          ${imgTag}
+        </div>`;
+    }).join('');
+
+    const adminHtml = `${top}<div style="font-family:Arial,sans-serif;font-size:14px">${adminItemsHtml}</div>`;
+
+    // pririšame nuotraukas prie cid, jei yra
+    const attachments = items.map((it, idx) => {
+      if (!it.file) return null;
+      return {
+        filename: it.file.originalname || `detale_${it.idx}.jpg`,
+        content: it.file.buffer,
+        contentType: it.file.mimetype || 'application/octet-stream',
+        cid: `item${idx}_cid`
+      };
+    }).filter(Boolean);
+
+    const adminAddr = process.env.MAIL_USER || 'info@raskdali.lt';
+
+    // siunčiam el. laiškus
+    await transporter.sendMail({
+      from: `"RaskDali" <${adminAddr}>`,
+      to: adminAddr,
+      replyTo: email || undefined,
+      subject: `Užklausa (${plan}) – ${vardas || 'klientas'} [nemokama]`,
+      html: adminHtml,
+      attachments
+    });
+
+    if (email) {
+      const clientHtml = `
+        ${top}
+        <div style="font-family:Arial,sans-serif;font-size:14px">
+          <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
+          <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Dažniausiai pasiūlymą pateikiame per <b>24–48 val.</b></p>
+        </div>
+        ${EMAIL_FOOTER_HTML}
+      `;
+      await transporter.sendMail({
+        from: `"RaskDali" <${adminAddr}>`,
+        to: email,
+        subject: 'Jūsų užklausa gauta – RaskDali',
+        html: clientHtml
+      });
+    }
+
+    console.log(`[free] emails sent (plan=${plan}) to admin${email ? ' + client' : ''}`);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('FREE ORDER ERROR:', e);
+    return res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' });
+  }
+});
+
+/* =======================================================
    2) Paysera CALLBACK → finalizeOrder(orderid)
    ======================================================= */
 app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async (req, res) => {

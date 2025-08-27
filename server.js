@@ -253,7 +253,7 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
     await saveDrafts(drafts);
 
     // Paysera sumos (centais)
-    const AMOUNTS = { Mini: 99, Standart: 1499, Pro: 2499 };
+    const AMOUNTS = { Mini: 999, Standart: 2999, Pro: 5999 };
     const amount = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
     const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/, '');

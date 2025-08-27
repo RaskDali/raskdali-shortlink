@@ -30,7 +30,6 @@ const transporter = nodemailer.createTransport({
   auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
 });
 
-// (nebūtina, bet naudinga loguose pamatyti ar SMTP OK)
 transporter.verify().then(
   () => console.log('SMTP OK'),
   (e) => console.error('SMTP ERROR:', e?.message || e)
@@ -88,6 +87,18 @@ function normalizeReturnUrl(plan, rawReturn) {
   return fallback;
 }
 
+/* -------------------- El. laiškų footeris (klientui) -------------------- */
+const EMAIL_FOOTER_HTML = `
+  <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
+  <div style="font-family:Arial,sans-serif;font-size:13px;color:#374151;line-height:1.5">
+    <div style="font-weight:700;margin-bottom:4px">RaskDali</div>
+    <div>El. paštas: <a href="mailto:${escapeHtml(process.env.MAIL_USER || 'info@raskdali.lt')}" style="color:#436BAA;text-decoration:none">${escapeHtml(process.env.MAIL_USER || 'info@raskdali.lt')}</a></div>
+    <div>Taisyklės ir sąlygos: <a href="https://www.raskdali.lt/taisykles-ir-salygos" style="color:#436BAA">peržiūrėti</a></div>
+    <div>Grąžinimo politika: <a href="https://www.raskdali.lt/grazinimo-politika" style="color:#436BAA">peržiūrėti</a></div>
+    <div style="margin-top:8px">Jei turite klausimų – <b>atsakykite į šį laišką</b>.</div>
+  </div>
+`;
+
 /* =======================================================
    Bendra finalizacijos funkcija — siunčia laiškus ir išvalo juodraštį
    ======================================================= */
@@ -99,7 +110,6 @@ async function finalizeOrder(orderid, reason = 'unknown') {
     return false;
   }
   if (draft.emailed) {
-    // jei buvo bandyta anksčiau — tiesiog išvalom
     delete drafts[orderid];
     await saveDrafts(drafts);
     console.log(`[finalizeOrder] already emailed, cleanup ${orderid}`);
@@ -160,13 +170,15 @@ async function finalizeOrder(orderid, reason = 'unknown') {
       const clientHtml = `
         ${top}
         <div style="font-family:Arial,sans-serif;font-size:14px">
-          <h2 style="margin:6px 0 10px 0">Jūsų užklausa gauta 🎉</h2>
-          <p>Ačiū! Gavome Jūsų užklausą (<b>${escapeHtml(plan)}</b>). Dažniausiai pasiūlymą pateikiame per <b>24–48 val.</b></p>
-        </div>`;
+          <h2 style="margin:6px 0 10px 0">Jūsų užklausa apmokėta ir priimta 🎉</h2>
+          <p>Ačiū! Gavome Jūsų apmokėjimą ir užklausą (<b>${escapeHtml(plan)}</b>). Mūsų komanda paruoš <b>detalių pasiūlymą artimiausiu metu</b> (paprastai per 24–48 val.).</p>
+        </div>
+        ${EMAIL_FOOTER_HTML}
+      `;
       await transporter.sendMail({
         from: `"RaskDali" <${adminAddr}>`,
         to: email,
-        subject: 'Jūsų užklausa gauta – RaskDali',
+        subject: 'Jūsų užklausa apmokėta ir priimta – RaskDali',
         html: clientHtml,
       });
     }
@@ -240,14 +252,14 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
     };
     await saveDrafts(drafts);
 
-    // Paysera
-    const AMOUNTS = { Mini: 99, Standart: 1499, Pro: 2499 }; // centais
+    // Paysera sumos (centais)
+    const AMOUNTS = { Mini: 99, Standart: 1499, Pro: 2499 };
     const amount = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
     const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/, '');
     const returnUrl = normalizeReturnUrl(plan, req.body.return || '');
 
-    // >>> pridėjau orderid "o" į accept/cancel
+    // įdedam orderid į accept/cancel
     const accepturl = `${apiHost}/thanks?ok=1&o=${encodeURIComponent(orderid)}&return=${encodeURIComponent(returnUrl)}`;
     const cancelurl = `${apiHost}/thanks?ok=0&o=${encodeURIComponent(orderid)}&return=${encodeURIComponent(returnUrl)}`;
 
@@ -288,7 +300,6 @@ app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async
       await finalizeOrder(orderid, 'callback');
     } else {
       console.log('CALLBACK received but status!=1 for', orderid, 'status=', payload.status);
-      // jei neapmokėta — tiesiog paliekam juodraštį; /thanks fallback’o nesiunčiam
     }
 
     res.send('OK');
@@ -299,14 +310,13 @@ app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async
 });
 
 /* =======================================================
-   3) Ačiū (fallback) — jei ok=1 ir turim o=orderid → finalizeOrder
+   3) Ačiū ekranas — aiškesnis tekstas + grįžimas į pradžią
    ======================================================= */
 app.get('/thanks', async (req, res) => {
   const ok = req.query.ok === '1';
   const orderid = (req.query.o || '').toString();
-  const back = (req.query.return || '/').toString();
+  const siteHome = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
 
-  // Fallback: jei grįžom su ok=1 ir dar turime juodraštį — mėginam išsiųsti
   if (ok && orderid) {
     await finalizeOrder(orderid, 'return');
   }
@@ -314,23 +324,24 @@ app.get('/thanks', async (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <meta charset="utf-8">
-<title>${ok ? 'Apmokėta' : 'Apmokėjimas atšauktas'}</title>
+<title>${ok ? 'Užklausa apmokėta ir išsiųsta' : 'Mokėjimas neįvyko'}</title>
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#fff;margin:0;display:grid;place-items:center;height:100dvh}
-  .card{max-width:560px;padding:28px;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 8px 30px #00000014;text-align:center}
+  .card{max-width:640px;padding:28px;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 8px 30px #00000014;text-align:center}
   .ok{color:#16a34a;font-size:26px;font-weight:800;margin:10px 0}
   .fail{color:#ef4444;font-size:26px;font-weight:800;margin:10px 0}
+  p{font-size:16px;color:#374151}
   a.btn{display:inline-block;margin-top:16px;padding:12px 18px;border-radius:12px;background:#436BAA;color:#fff;text-decoration:none;font-weight:600}
 </style>
 <div class="card">
-  <div class="${ok ? 'ok' : 'fail'}">${ok ? 'Ačiū! Mokėjimas patvirtintas.' : 'Mokėjimas neįvyko.'}</div>
-  <div>Galite grįžti į formą.</div>
-  <a class="btn" href="${escapeHtml(back)}">Grįžti</a>
+  <div class="${ok ? 'ok' : 'fail'}">${ok ? 'Ačiū! Jūsų užklausa sėkmingai apmokėta ir išsiųsta.' : 'Mokėjimas neįvyko.'}</div>
+  <p>${ok ? 'Laukite detalių pasiūlymo artimiausiu metu. Jei turite klausimų – tiesiog atsakykite į mūsų laišką.' : 'Galite pabandyti dar kartą arba susisiekti su mumis.'}</p>
+  <a class="btn" href="${escapeHtml(siteHome)}">Eiti į pradžią</a>
 </div>`);
 });
 
 /* =======================================================
-   4) Pasiūlymų (offers) dalis — be pakeitimų, tik kad nuotraukos matytųsi
+   4) Pasiūlymų (offers) dalis — be funkcinių pakeitimų
    ======================================================= */
 let offers = {};
 try { offers = JSON.parse(await fs.readFile('offers.json', 'utf8')); } catch { offers = {}; }

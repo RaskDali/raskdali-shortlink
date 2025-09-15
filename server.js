@@ -1,5 +1,8 @@
 import express from 'express';
 import fs from 'fs/promises';
+import fsSync from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { nanoid } from 'nanoid';
 import nodemailer from 'nodemailer';
 import multer from 'multer';
@@ -9,10 +12,21 @@ import PDFDocument from 'pdfkit';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Jei turi logotipą repo, įkelk į ./public/logo.png arba nurodyk per .env -> LOGO_PATH
+const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'public', 'logo.png');
+
+// Failų saugyklos
+const DRAFTS_FILE = 'drafts.json';  // mokamų planų juodraščiai iki Payseros
+const ORDERS_FILE = 'orders.json';  // užsakymai iš pasiūlymo
+const OFFERS_FILE = 'offers.json';  // pasiūlymai (PDF+link), su createdAt
+
+// --- Express
 const app = express();
 const port = process.env.PORT || 10000;
 
-/* -------------------- Middleware -------------------- */
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use((req, res, next) => {
@@ -23,7 +37,10 @@ app.use((req, res, next) => {
   next();
 });
 
-/* -------------------- SMTP (pool – greičiau) -------------------- */
+// Greitam liveness patikrinimui
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+// --- SMTP (pool)
 const transporter = nodemailer.createTransport({
   pool: true,
   host: process.env.MAIL_HOST,
@@ -32,37 +49,27 @@ const transporter = nodemailer.createTransport({
   auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
   maxConnections: 5,
   maxMessages: 100,
-  socketTimeout: 20000
+  socketTimeout: 20000,
 });
 transporter.verify().then(
   () => console.log('SMTP OK'),
   (e) => console.error('SMTP ERROR:', e?.message || e)
 );
 
-/* -------------------- Failai -------------------- */
-const DRAFTS_FILE = 'drafts.json';  // mokamų planų juodraščiai
-const ORDERS_FILE = 'orders.json';  // užsakymai iš pasiūlymo
-const OFFERS_FILE = 'offers.json';  // pasiūlymai
-
-async function loadDrafts() { try { return JSON.parse(await fs.readFile(DRAFTS_FILE, 'utf8')); } catch { return {}; } }
-async function saveDrafts(d) { await fs.writeFile(DRAFTS_FILE, JSON.stringify(d, null, 2)); }
-
-async function loadOrders() { try { return JSON.parse(await fs.readFile(ORDERS_FILE, 'utf8')); } catch { return {}; } }
-async function saveOrders(o) { await fs.writeFile(ORDERS_FILE, JSON.stringify(o, null, 2)); }
-
-let offers = {};
-try { offers = JSON.parse(await fs.readFile(OFFERS_FILE, 'utf8')); } catch { offers = {}; }
-
-/* -------------------- Pagalbinės -------------------- */
+// --- Helpers
 function escapeHtml(str) {
-  return String(str || '')
-    .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+  return String(str ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
+
 function buildQuery(obj) {
   return Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
 }
+
 function buildPayseraRequest(rawParams, projectId, signPassword) {
   const params = { version: 1, projectid: Number(projectId), ...rawParams };
   const q = buildQuery(params);
@@ -70,20 +77,23 @@ function buildPayseraRequest(rawParams, projectId, signPassword) {
   const sign = crypto.createHash('md5').update(data + signPassword).digest('hex');
   return { data, sign };
 }
+
 function verifyPayseraResponse(data, sign, signPassword) {
   const calc = crypto.createHash('md5').update(data + signPassword).digest('hex');
   return calc === (sign || '').toLowerCase();
 }
+
 function parsePayseraData(dataB64) {
   const decoded = Buffer.from(dataB64, 'base64').toString('utf8');
   return Object.fromEntries(new URLSearchParams(decoded));
 }
+
 function normalizeReturnUrl(plan, rawReturn) {
   const SITE = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
   const defaults = {
-    Mini:     `${SITE}/uzklausa-mini`,
+    Mini: `${SITE}/uzklausa-mini`,
     Standart: `${SITE}/uzklausa-standart`,
-    Pro:      `${SITE}/uzklausa-pro`,
+    Pro: `${SITE}/uzklausa-pro`,
   };
   const fallback = defaults[plan] || defaults.Mini;
   if (!rawReturn || typeof rawReturn !== 'string') return fallback;
@@ -92,49 +102,35 @@ function normalizeReturnUrl(plan, rawReturn) {
   return fallback;
 }
 
-/* -------------------- Pardavėjo rekvizitai -------------------- */
-const SELLER = {
-  brand:      process.env.SELLER_BRAND || 'RaskDali',
-  company:    process.env.SELLER_COMPANY || 'UAB „Magdaris“',
-  address:    process.env.SELLER_ADDRESS || 'Vilniaus g. 3B, Karmėlava, 54448, Lietuva',
-  email:      process.env.SELLER_EMAIL || (process.env.MAIL_USER || 'info@raskdali.lt'),
-  website:    process.env.SELLER_WEBSITE || 'raskdali.lt',
-  code:       process.env.SELLER_CODE || '159941827',
-  vat:        process.env.SELLER_VAT || 'LT599418219'
-};
+// Atomic write – saugiau, kai kelios užklausos rašo vienu metu
+async function atomicWrite(file, data) {
+  const tmp = `${file}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  await fs.writeFile(tmp, data);
+  await fs.rename(tmp, file);
+}
 
-/* -------------------- El. laiškų footeris -------------------- */
+// JSON helpers
+async function loadJson(file) {
+  try { return JSON.parse(await fs.readFile(file, 'utf8')); }
+  catch { return {}; }
+}
+async function saveJson(file, obj) {
+  await atomicWrite(file, JSON.stringify(obj, null, 2));
+}
+
+// Email footer klientui
 const EMAIL_FOOTER_HTML = `
   <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
   <div style="font-family:Arial,sans-serif;font-size:13px;color:#374151;line-height:1.5">
-    <div style="font-weight:700;margin-bottom:4px">${escapeHtml(SELLER.brand)}</div>
-    <div>El. paštas: <a href="mailto:${escapeHtml(SELLER.email)}" style="color:#436BAA;text-decoration:none">${escapeHtml(SELLER.email)}</a></div>
+    <div style="font-weight:700;margin-bottom:4px">RaskDali</div>
+    <div>El. paštas: <a href="mailto:${escapeHtml(process.env.MAIL_USER || 'info@raskdali.lt')}" style="color:#436BAA;text-decoration:none">${escapeHtml(process.env.MAIL_USER || 'info@raskdali.lt')}</a></div>
     <div>Taisyklės ir sąlygos: <a href="https://www.raskdali.lt/taisykles-ir-salygos" style="color:#436BAA">peržiūrėti</a></div>
     <div>Grąžinimo politika: <a href="https://www.raskdali.lt/grazinimo-politika" style="color:#436BAA">peržiūrėti</a></div>
     <div style="margin-top:8px">Jei turite klausimų – <b>atsakykite į šį laišką</b>.</div>
   </div>
 `;
 
-/* -------------------- PDF sąskaita (sutvarkyta) -------------------- */
-function eur(n) { return Number(n || 0).toFixed(2); }
-function drawTableRow(doc, cols, widths, opts = {}) {
-  const { x, y, fontSize = 9, bold = false, fill = false } = opts;
-  const startX = x, startY = y;
-  doc.fontSize(fontSize);
-  if (fill) {
-    doc.save(); doc.rect(startX, startY - 2, widths.reduce((a, b) => a + b, 0), 18).fill('#F1F5F9'); doc.restore();
-  }
-  let cx = startX;
-  cols.forEach((txt, i) => {
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica')
-       .text(txt, cx + 4, startY, { width: widths[i] - 8, align: i >= cols.length - 2 ? 'right' : 'left' });
-    cx += widths[i];
-  });
-  // bottom line
-  doc.moveTo(startX, startY + 16).lineTo(cx, startY + 16).strokeColor('#E5E7EB').lineWidth(0.6).stroke().strokeColor('#000');
-  return startY + 18;
-}
-
+// --- PDF sąskaita su logotipu (jei yra)
 async function makeInvoicePdfBuffer({ invoiceNo, buyer, items, total }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40 });
@@ -143,88 +139,97 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items, total }) {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    // Header
-    doc.font('Helvetica-Bold').fontSize(20).text(`${SELLER.brand}`, { continued: true }).fontSize(11).text(`  |  ${SELLER.website}`);
-    doc.moveDown(0.4);
-    doc.font('Helvetica').fontSize(10).text(`${SELLER.company}`);
-    doc.text(`${SELLER.address}`);
-    doc.text(`El. paštas: ${SELLER.email}`);
-    doc.text(`Įmonės kodas: ${SELLER.code}    PVM mokėtojo kodas: ${SELLER.vat}`);
+    const startY = 36;
+    let headerBottomY = startY;
 
-    doc.moveUp(4.2);
-    doc.font('Helvetica-Bold').fontSize(12).text('PVM SĄSKAITA-FAKTŪRA', { align: 'right' });
-    doc.font('Helvetica').fontSize(10).text(`Serija/NR: ${invoiceNo}`, { align: 'right' });
-    doc.text(`Išrašymo data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'right' });
-
-    // Buyer
-    doc.moveDown(1.2);
-    doc.font('Helvetica-Bold').fontSize(11).text('Pirkėjas');
-    doc.font('Helvetica').fontSize(10);
-    doc.text(buyer.name || '');
-    if (buyer.code) doc.text(`Įmonės kodas: ${buyer.code}`);
-    if (buyer.vat)  doc.text(`PVM kodas: ${buyer.vat}`);
-    if (buyer.addr) doc.text(`Adresas: ${buyer.addr}`);
-    if (buyer.email)doc.text(`El. paštas: ${buyer.email}`);
-
-    // Table
-    doc.moveDown(1);
-    const x = 40, widths = [220, 50, 70, 70, 70, 90]; // Pavadinimas, Kiekis, Vnt kaina su PVM, Vnt kaina be PVM, PVM (21%), Suma
-    let y = doc.y + 6;
-
-    y = drawTableRow(doc,
-      ['Produktas / paslauga', 'Kiekis', 'Vnt. kaina su PVM', 'Vnt. kaina be PVM', 'PVM (21%)', 'Suma su PVM'],
-      widths, { x, y, bold: true, fill: true });
-
-    let sumGross = 0, sumNet = 0, sumVat = 0;
-
-    items.forEach(it => {
-      const qty = Number(it.qty || 1);
-      const gross = Number(it.price || 0) * qty;
-      const net = gross / 1.21;
-      const vat = gross - net;
-      sumGross += gross; sumNet += net; sumVat += vat;
-
-      y = drawTableRow(doc,
-        [it.name || '(be pavadinimo)', eur(qty), eur(it.price || 0), eur((it.price || 0) / 1.21), eur(((it.price || 0) - ((it.price || 0) / 1.21))), eur(gross)],
-        widths, { x, y });
-      if (it.desc) {
-        doc.fontSize(9).fillColor('#6B7280').text(it.desc, x + 8, y - 14, { width: widths[0] - 16 });
-        doc.fillColor('#000');
+    try {
+      if (fsSync.existsSync(LOGO_PATH)) {
+        doc.image(LOGO_PATH, 40, startY, { width: 120 });
+        headerBottomY = Math.max(headerBottomY, startY + 60);
       }
+    } catch (_) { /* jei failo nėra – be logotipo */ }
+
+    doc.fontSize(11).text('PVM SĄSKAITA–FAKTŪRA', 0, startY, { align: 'right' });
+    doc.fontSize(10).text(`Serija/NR: ${invoiceNo}`, { align: 'right' });
+    doc.text(`Data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'right' });
+
+    doc.moveTo(40, headerBottomY + 20).lineTo(555, headerBottomY + 20).strokeColor('#e5e7eb').lineWidth(1).stroke();
+
+    const colLeftX = 40;
+    const colRightX = 320;
+    let y = headerBottomY + 34;
+
+    doc.fillColor('#111').fontSize(11).text('Pardavėjas:', colLeftX, y);
+    doc.fontSize(10).fillColor('#333');
+    doc.text('RaskDali / UAB „Magdaris“', colLeftX, y + 14);
+    doc.text('Vilniaus g. 3B, Karmėlava, 54448, Lietuva', colLeftX);
+    doc.text(`El. paštas: ${process.env.MAIL_USER || 'info@raskdali.lt'}`, colLeftX);
+    doc.text('Įmonės kodas: 159941827', colLeftX);
+    doc.text('PVM mok. kodas: LT599418219', colLeftX);
+
+    doc.fillColor('#111').fontSize(11).text('Pirkėjas:', colRightX, y);
+    doc.fontSize(10).fillColor('#333');
+    doc.text(buyer?.name || '', colRightX, y + 14);
+    if (buyer?.code) doc.text(`Įmonės kodas: ${buyer.code}`, colRightX);
+    if (buyer?.vat)  doc.text(`PVM kodas: ${buyer.vat}`, colRightX);
+    if (buyer?.addr) doc.text(`Adresas: ${buyer.addr}`, colRightX);
+    if (buyer?.email)doc.text(`El. paštas: ${buyer.email}`, colRightX);
+
+    y = doc.y + 16;
+    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 10;
+
+    doc.fontSize(10).fillColor('#111').text('Prekė / paslauga', 40, y);
+    doc.text('Kaina su PVM', 420, y, { width: 80, align: 'right' });
+    y += 6;
+    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 8;
+
+    doc.fontSize(10).fillColor('#333');
+    items.forEach((it, i) => {
+      doc.text(`${i + 1}. ${it.name || ''}`, 40, y, { width: 360 });
+      doc.text(`${Number(it.price || 0).toFixed(2)} €`, 420, y, { width: 80, align: 'right' });
+      y = doc.y + 4;
+      if (it.desc) {
+        doc.fillColor('#666').fontSize(9).text(it.desc, 60, y, { width: 340 });
+        doc.fontSize(10).fillColor('#333');
+        y = doc.y + 4;
+      }
+      doc.moveTo(40, y).lineTo(555, y).strokeColor('#f1f5f9').lineWidth(1).stroke();
+      y += 8;
     });
 
-    // Totals
-    doc.moveDown(1);
-    doc.font('Helvetica-Bold').fontSize(11).text('Suvestinė', x, y + 8);
-    doc.font('Helvetica').fontSize(10);
-    const rightX = x + widths.reduce((a, b) => a + b, 0) - 200;
-
-    doc.text(`Iš viso be PVM: ${eur(sumNet)} €`, rightX, y + 8, { align: 'right', width: 200 });
-    doc.text(`PVM (21%): ${eur(sumVat)} €`, rightX, doc.y, { align: 'right', width: 200 });
-    doc.font('Helvetica-Bold').text(`Iš viso su PVM: ${eur(sumGross)} €`, rightX, doc.y + 2, { align: 'right', width: 200 });
-
-    doc.moveDown(1.2);
-    doc.font('Helvetica-Oblique').fontSize(9).fillColor('#374151')
-       .text('Pastaba: užsakymas pradedamas vykdyti tik po apmokėjimo.', x);
-    doc.fillColor('#000');
+    doc.fontSize(11).fillColor('#111');
+    doc.text(`Iš viso su PVM: ${Number(total || 0).toFixed(2)} €`, 0, y + 8, { align: 'right' });
 
     doc.end();
   });
 }
 
-/* =======================================================
-   finalizeOrder — siunčia laiškus (mokami planai po Payseros)
-   ======================================================= */
+// --- Drafts/Orders/Offers cache
+let offersCache = {};
+let draftsCache = {};
+let ordersCache = {};
+
+async function ensureCaches() {
+  offersCache = await loadJson(OFFERS_FILE);
+  draftsCache = await loadJson(DRAFTS_FILE);
+  ordersCache = await loadJson(ORDERS_FILE);
+}
+await ensureCaches();
+
+// =======================================================
+//  finalizeOrder — siunčia laiškus (mokami planai po Payseros)
+// =======================================================
 async function finalizeOrder(orderid, reason = 'unknown') {
-  const drafts = await loadDrafts();
-  const draft = drafts[orderid];
+  const draft = draftsCache[orderid];
   if (!draft) {
     console.log(`[finalizeOrder] draft not found for ${orderid} (reason=${reason})`);
     return false;
   }
   if (draft.emailed) {
-    delete drafts[orderid];
-    await saveDrafts(drafts);
+    delete draftsCache[orderid];
+    await saveJson(DRAFTS_FILE, draftsCache);
     console.log(`[finalizeOrder] already emailed, cleanup ${orderid}`);
     return true;
   }
@@ -234,7 +239,7 @@ async function finalizeOrder(orderid, reason = 'unknown') {
   const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
   const top = `
     <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
-      <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="${escapeHtml(SELLER.brand)}" style="height:26px"></td></tr>
+      <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="RaskDali" style="height:26px"></td></tr>
     </table>
     <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">
       <p style="margin:0 0 12px 0"><b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; <b>Detalių (užpildyta):</b> ${items.length}</p>
@@ -266,42 +271,37 @@ async function finalizeOrder(orderid, reason = 'unknown') {
     };
   }).filter(Boolean);
 
-  const adminAddr = SELLER.email;
+  const adminAddr = process.env.MAIL_USER || 'info@raskdali.lt';
 
   try {
-    // admin
     transporter.sendMail({
-      from: `"${SELLER.brand}" <${adminAddr}>`,
+      from: `"RaskDali" <${adminAddr}>`,
       to: adminAddr,
       subject: `Užklausa (${plan}) – ${vardas || 'klientas'} (order ${orderid}, via ${reason})`,
       html: adminHtml,
       attachments,
     }).catch(e => console.error('MAIL admin error:', e));
 
-    // client
     if (email) {
       const clientHtml = `
         ${top}
         <div style="font-family:Arial,sans-serif;font-size:14px">
           <h2 style="margin:6px 0 10px 0">Jūsų užklausa apmokėta ir priimta 🎉</h2>
           <p>Ačiū! Gavome Jūsų apmokėjimą ir užklausą (<b>${escapeHtml(plan)}</b>). Mūsų komanda paruoš <b>detalių pasiūlymą artimiausiu metu</b> (paprastai per 24–48 val.).</p>
-          <p style="margin-top:8px;color:#374151"><i>Užsakymas pradedamas vykdyti tik po apmokėjimo.</i></p>
         </div>
         ${EMAIL_FOOTER_HTML}
       `;
       transporter.sendMail({
-        from: `"${SELLER.brand}" <${adminAddr}>`,
+        from: `"RaskDali" <${adminAddr}>`,
         to: email,
         subject: 'Jūsų užklausa apmokėta ir priimta – RaskDali',
         html: clientHtml,
       }).catch(e => console.error('MAIL client error:', e));
     }
 
-    // cleanup
     draft.emailed = true;
-    const d2 = await loadDrafts();
-    delete d2[orderid];
-    await saveDrafts(d2);
+    delete draftsCache[orderid];
+    await saveJson(DRAFTS_FILE, draftsCache);
 
     console.log(`[finalizeOrder] emails queued for ${orderid} (reason=${reason})`);
     return true;
@@ -311,15 +311,12 @@ async function finalizeOrder(orderid, reason = 'unknown') {
   }
 }
 
-/* =======================================================
-   1) MOKAMI PLANAI: /api/uzklausa-start → Paysera
-   ======================================================= */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 40 }
-});
+// =======================================================
+// 1) MOKAMI PLANAI: /api/uzklausa-start → Paysera
+// =======================================================
+const uploadPaid = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 40 } });
 
-app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
+app.post('/api/uzklausa-start', uploadPaid.any(), async (req, res, next) => {
   try {
     const vin   = (req.body.vin || '').trim();
     const marke = (req.body.marke || '').trim();
@@ -357,14 +354,13 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
 
     const orderid = nanoid();
 
-    const drafts = await loadDrafts();
-    drafts[orderid] = {
+    draftsCache[orderid] = {
       ts: Date.now(), emailed: false,
       plan, count, vin, marke, modelis, metai, komentaras, vardas, email, tel, items
     };
-    await saveDrafts(drafts);
+    await saveJson(DRAFTS_FILE, draftsCache);
 
-    const AMOUNTS = { Mini: 999, Standart: 2999, Pro: 5999 };
+    const AMOUNTS = { Mini: 999, Standart: 2999, Pro: 5999 }; // centais
     const amount = AMOUNTS[plan] ?? AMOUNTS.Mini;
 
     const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/, '');
@@ -374,11 +370,9 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
     const cancelurl = `${apiHost}/thanks?ok=0&o=${encodeURIComponent(orderid)}&return=${encodeURIComponent(returnUrl)}`;
 
     const { data, sign } = buildPayseraRequest({
-      orderid,
-      amount,
+      orderid, amount,
       currency: process.env.PAYSERA_CURRENCY || 'EUR',
-      accepturl,
-      cancelurl,
+      accepturl, cancelurl,
       callbackurl: `${apiHost}/api/paysera/callback`,
       test: process.env.PAYSERA_TEST === '1' ? 1 : 0
     }, process.env.PAYSERA_PROJECT_ID, process.env.PAYSERA_PASSWORD);
@@ -386,13 +380,13 @@ app.post('/api/uzklausa-start', upload.any(), async (req, res) => {
     res.json({ pay_url: `https://bank.paysera.com/pay/?data=${encodeURIComponent(data)}&sign=${sign}` });
   } catch (e) {
     console.error('UZKLAUSA-START ERROR:', e);
-    res.status(400).json({ error: 'Nepavyko pradėti apmokėjimo.' });
+    next(e);
   }
 });
 
-/* =======================================================
-   2) Paysera CALLBACK → finalizeOrder(orderid)
-   ======================================================= */
+// =======================================================
+// 2) Paysera CALLBACK → finalizeOrder(orderid)
+// =======================================================
 app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async (req, res) => {
   try {
     const { data, sign } = req.body || {};
@@ -401,17 +395,14 @@ app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async
       console.error('PAYSERA CALLBACK: sign mismatch');
       return res.status(400).send('ERROR');
     }
-
     const payload = parsePayseraData(data);
     const orderid = payload.orderid;
     const statusOk = String(payload.status || '') === '1';
-
     if (statusOk) {
       finalizeOrder(orderid, 'callback').catch(e => console.error('finalizeOrder err:', e));
     } else {
-      console.log('CALLBACK received but status!=1 for', orderid, 'status=', payload.status);
+      console.log('CALLBACK status!=1 for', orderid, 'status=', payload.status);
     }
-
     res.send('OK');
   } catch (e) {
     console.error('PAYSERA CALLBACK ERROR:', e);
@@ -419,9 +410,9 @@ app.post('/api/paysera/callback', express.urlencoded({ extended: false }), async
   }
 });
 
-/* =======================================================
-   3) Ačiū ekranas — greitas, su aiškia žinute
-   ======================================================= */
+// =======================================================
+// 3) Ačiū ekranas — atsakymas greitai
+// =======================================================
 app.get('/thanks', async (req, res) => {
   const ok = req.query.ok === '1';
   const orderid = (req.query.o || '').toString();
@@ -445,17 +436,17 @@ app.get('/thanks', async (req, res) => {
 </style>
 <div class="card">
   <div class="${ok ? 'ok' : 'fail'}">${ok ? 'Ačiū! Jūsų užklausa sėkmingai apmokėta ir išsiųsta.' : 'Mokėjimas neįvyko.'}</div>
-  <p>${ok ? 'Užsakymas pradedamas vykdyti tik po apmokėjimo. Laukite detalių pasiūlymo artimiausiu metu.' : 'Galite pabandyti dar kartą arba susisiekti su mumis.'}</p>
+  <p>${ok ? 'Užsakymas vykdomas tik gavus apmokėjimą. Laukite detalių pasiūlymo artimiausiu metu.' : 'Galite pabandyti dar kartą arba susisiekti su mumis.'}</p>
   <a class="btn" href="${escapeHtml(siteHome)}">Eiti į pradžią</a>
 </div>`);
 });
 
-/* =======================================================
-   4) Nemokamas planas – priima formą ir el. paštus siunčia fone
-   ======================================================= */
+// =======================================================
+// 4) Nemokamas planas
+// =======================================================
 const uploadFree = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5*1024*1024, files: 20 } });
 
-async function handleFreeRequest(req, res) {
+async function handleFreeRequest(req, res, next) {
   try {
     const vin      = (req.body.vin || '').trim();
     const marke    = (req.body.marke || '').trim();
@@ -491,12 +482,13 @@ async function handleFreeRequest(req, res) {
 
     if (!items.length) return res.status(400).json({ error: 'Bent viena detalė turi būti užpildyta.' });
 
+    // atsakome greitai
     res.json({ ok: true });
 
     const logoUrl = 'https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png';
     const commonTop = `
       <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
-        <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="${escapeHtml(SELLER.brand)}" style="height:26px"></td></tr>
+        <tr><td style="padding:16px 0"><img src="${logoUrl}" alt="RaskDali" style="height:26px"></td></tr>
       </table>
       <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">
         <p style="margin:0 0 12px 0"><b>Planas:</b> ${escapeHtml(plan)} &nbsp;|&nbsp; <b>Detalių (užpildyta):</b> ${items.length}</p>
@@ -516,21 +508,19 @@ async function handleFreeRequest(req, res) {
     `).join('');
 
     const adminAttachments = items.map(it => it.attach).filter(Boolean);
-    const adminAddr = SELLER.email;
+    const adminAddr = process.env.MAIL_USER || 'info@raskdali.lt';
 
-    // ADMIN
     transporter.sendMail({
-      from: `"${SELLER.brand}" <${adminAddr}>`,
+      from: `"RaskDali" <${adminAddr}>`,
       to: adminAddr,
       subject: `Nemokama užklausa – ${vardas || 'klientas'}`,
       html: `${commonTop}<div style="font-family:Arial,sans-serif;font-size:14px">${adminItemsHtml}</div>`,
       attachments: adminAttachments
     }).catch(e => console.error('FREE admin mail err:', e));
 
-    // CLIENT
     if (email) {
       transporter.sendMail({
-        from: `"${SELLER.brand}" <${adminAddr}>`,
+        from: `"RaskDali" <${adminAddr}>`,
         to: email,
         subject: 'Jūsų nemokama užklausa gauta – RaskDali',
         html: `
@@ -545,25 +535,30 @@ async function handleFreeRequest(req, res) {
     }
   } catch (err) {
     console.error('FREE ERROR:', err);
-    try { res.status(500).json({ error: 'Serverio klaida. Bandykite dar kartą.' }); } catch {}
+    next(err);
   }
 }
 app.post('/api/uzklausa_free', uploadFree.any(), handleFreeRequest);
 app.post('/api/uzklausa-free', uploadFree.any(), handleFreeRequest);
 
-/* =======================================================
-   5) Pasiūlymai (offers) — 7 d. galiojimas
-   ======================================================= */
-app.post('/api/sukurti-pasiulyma', async (req, res) => {
-  const data = req.body;
-  const id = nanoid(6);
-  offers[id] = { ...data, createdAt: Date.now() };
-  await fs.writeFile(OFFERS_FILE, JSON.stringify(offers, null, 2));
-  res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
+// =======================================================
+// 5) Pasiūlymai (offers) — 7 d. galiojimas
+// =======================================================
+app.post('/api/sukurti-pasiulyma', async (req, res, next) => {
+  try {
+    const data = req.body; // { items: [...] }
+    const id = nanoid(6);
+    offersCache[id] = { ...data, createdAt: Date.now() };
+    await saveJson(OFFERS_FILE, offersCache);
+    res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
+  } catch (e) {
+    console.error('CREATE OFFER ERROR:', e);
+    next(e);
+  }
 });
 
 app.get('/klientoats/:id', (req, res) => {
-  const offer = offers[req.params.id];
+  const offer = offersCache[req.params.id];
   if (!offer) return res.status(404).send('Pasiūlymas nerastas');
 
   const MAX_AGE_DAYS = 7;
@@ -581,231 +576,4 @@ app.get('/klientoats/:id', (req, res) => {
   res.send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Detalių pasiūlymas</title>
 <style>
-  body{font-family:Arial, sans-serif;background:#f9f9f9;margin:0}
-  .wrap{max-width:760px;margin:24px auto;background:#fff;border-radius:12px;padding:24px 28px;box-shadow:0 2px 24px #0001}
-  .item{border-bottom:1px solid #e5e7eb;padding:14px 0}
-  .item:last-child{border-bottom:none}
-  .img{margin-top:6px}
-  .img img{max-width:120px;max-height:120px;border:1px solid #e5e7eb;border-radius:8px}
-  label{display:block;margin-top:6px}
-  .sub{color:#6b7280;font-size:13px}
-  input,button{font-size:14px}
-  .btn{background:#436BAA;color:#fff;border:none;border-radius:10px;padding:10px 16px;cursor:pointer}
-</style></head><body>
-<div class="wrap">
-  <h1>Detalių pasiūlymas</h1>
-  <form method="POST" action="/klientoats/${req.params.id}/order">
-    <div><label>Vardas/įmonė:<br><input name="vardas" required style="width:100%"></label></div>
-    <div><label>El. paštas:<br><input type="email" name="email" required style="width:100%"></label></div>
-    <div><label>Pristatymo adresas:<br><input name="adresas" required style="width:100%"></label></div>
-
-    <div class="sub" style="margin-top:8px">Rekvizitai sąskaitai (jei reikia)</div>
-    <div><label>Įmonės pavadinimas (nebūtina)<br><input name="imone" style="width:100%"></label></div>
-    <div><label>Įmonės kodas (nebūtina)<br><input name="imones_kodas" style="width:100%"></label></div>
-    <div><label>PVM kodas (nebūtina)<br><input name="pvm_kodas" style="width:100%"></label></div>
-    <div><label>Sąskaitos adresas (nebūtina)<br><input name="saskaitos_adresas" style="width:100%"></label></div>
-
-    <hr>
-    ${(offer.items || []).map((item, i) => `
-      <div class="item">
-        <b>${item.pozNr ? `${item.pozNr}. ` : ''}${item.name || ''}</b>
-        ${item.type ? ` <span style="color:#406BBA;font-size:.95em">(${item.type})</span>` : ''}
-        ${item.desc ? `<div><i>${item.desc}</i></div>` : ''}
-        ${item.eta ? `<div>Pristatymas: <b>${item.eta}</b></div>` : ''}
-        <div>Kaina: <b>${item['price-vat'] || ''}€</b> ${item['price-novat'] ? `(be PVM ${item['price-novat']}€)` : ''}</div>
-        <div class="img">${item.imgSrc ? `<img src="${item.imgSrc}" loading="lazy" referrerpolicy="no-referrer" alt="">` : ''}</div>
-        <label><input type="checkbox" name="choose" value="${i}"> Užsakyti šią detalę</label>
-      </div>
-    `).join('')}
-    <button type="submit" class="btn" style="margin-top:12px">Užsakyti pasirinktas</button>
-  </form>
-</div>
-</body></html>`);
-});
-
-/* =======================================================
-   6) Užsakymas iš pasiūlymo → PDF + Paysera nuoroda + laiškai
-   ======================================================= */
-app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async (req, res) => {
-  try {
-    const offer = offers[req.params.id];
-    if (!offer) return res.status(404).send('Nerasta');
-
-    const pasirinktos = req.body.choose ? (Array.isArray(req.body.choose) ? req.body.choose : [req.body.choose]) : [];
-    const name   = (req.body.vardas || '').trim();
-    const email  = (req.body.email || '').trim();
-    const adresas= (req.body.adresas || '').trim();
-
-    const buyer = {
-      name: (req.body.imone || name || '').trim(),
-      code: (req.body.imones_kodas || '').trim(),
-      vat:  (req.body.pvm_kodas || '').trim(),
-      addr: (req.body.saskaitos_adresas || adresas || '').trim(),
-      email
-    };
-
-    let total = 0;
-    const pasirinktosPrekes = pasirinktos.map(i => offer.items[i]).filter(Boolean);
-    const cleanItems = pasirinktosPrekes.map(it => {
-      const p = parseFloat((it?.['price-vat'] || '0').replace(',', '.')) || 0;
-      total += p;
-      return { name: it?.name || '', desc: it?.desc || '', price: p, qty: 1 };
-    });
-
-    // 1) Išsaugome užsakymą
-    const orders = await loadOrders();
-    const orderid = nanoid();
-    orders[orderid] = { ts: Date.now(), offerId: req.params.id, buyer, items: cleanItems, total, status: 'pending_payment' };
-    await saveOrders(orders);
-
-    // 2) Paysera nuoroda
-    const amountCents = Math.round(total * 100);
-    const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/,'');
-    const accepturl = `${apiHost}/thanks?ok=1&o=${encodeURIComponent(orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
-    const cancelurl = `${apiHost}/thanks?ok=0&o=${encodeURIComponent(orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
-    const qp = new URLSearchParams({
-      version: '1',
-      projectid: String(Number(process.env.PAYSERA_PROJECT_ID)),
-      orderid,
-      amount: String(amountCents),
-      currency: process.env.PAYSERA_CURRENCY || 'EUR',
-      accepturl, cancelurl,
-      callbackurl: `${apiHost}/api/paysera/callback`,
-      test: process.env.PAYSERA_TEST === '1' ? '1' : '0'
-    }).toString();
-    const dataB64 = Buffer.from(qp).toString('base64');
-    const sign = crypto.createHash('md5').update(dataB64 + process.env.PAYSERA_PASSWORD).digest('hex');
-    const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(dataB64)}&sign=${sign}`;
-
-    // 3) PDF
-    const invoiceNo = `RD-${new Date().getFullYear()}-${orderid.slice(0,6).toUpperCase()}`;
-    const pdfBuffer = await makeInvoicePdfBuffer({ invoiceNo, buyer, items: cleanItems, total });
-
-    const detalesHtml = cleanItems.map(it => `
-      <li><b>${escapeHtml(it.name)}</b> — ${eur(it.price)} € ${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}</li>
-    `).join('');
-
-    // 4) Laiškai
-    transporter.sendMail({
-      from: `"${SELLER.brand}" <${SELLER.email}>`,
-      to: SELLER.email,
-      subject: `Naujas užsakymas iš pasiūlymo – ${name || buyer.name || 'klientas'} (order ${orderid})`,
-      html: `
-        <h3>Užsakymas iš pasiūlymo</h3>
-        <p><b>OrderID:</b> ${orderid}</p>
-        <p><b>Pirkėjas:</b> ${escapeHtml(buyer.name)} ${buyer.code ? ' | ' + escapeHtml(buyer.code) : ''} ${buyer.vat ? ' | ' + escapeHtml(buyer.vat): ''}</p>
-        <p><b>El. paštas:</b> ${escapeHtml(email)}</p>
-        <p><b>Adresas:</b> ${escapeHtml(buyer.addr || adresas)}</p>
-        <ul>${detalesHtml}</ul>
-        <p><b>Viso su PVM:</b> ${eur(total)} €</p>
-        <p><a href="${payUrl}" target="_blank">Apmokėti per Paysera</a></p>
-      `,
-      attachments: [{ filename: `${invoiceNo}.pdf`, content: pdfBuffer }]
-    }).catch(e => console.error('offer→admin mail err:', e));
-
-    if (email) {
-      transporter.sendMail({
-        from: `"${SELLER.brand}" <${SELLER.email}>`,
-        to: email,
-        subject: `Sąskaita apmokėjimui – ${invoiceNo}`,
-        html: `
-          <h2>Užsakytos prekės</h2>
-          <ul>${detalesHtml}</ul>
-          <p>Viso su PVM: <b>${eur(total)} €</b></p>
-          <p>Norėdami apmokėti, spauskite: <a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
-          <p style="color:#374151"><i>Jei apmokėjote pateikdami užsakymą – nieko daryti nereikia.</i></p>
-          <p>Prisegame sąskaitą PDF formatu.</p>
-          ${EMAIL_FOOTER_HTML}
-        `,
-        attachments: [{ filename: `${invoiceNo}.pdf`, content: pdfBuffer }]
-      }).catch(e => console.error('offer→client mail err:', e));
-    }
-
-    // 5) Ačiū langas
-    res.send(`
-      <meta charset="utf-8">
-      <style>
-        body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#fff;margin:0;display:grid;place-items:center;height:100dvh}
-        .card{max-width:640px;padding:28px;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 8px 30px #00000014;text-align:center}
-        a.btn{display:inline-block;margin-top:16px;padding:12px 18px;border-radius:12px;background:#436BAA;color:#fff;text-decoration:none;font-weight:600}
-        .note{color:#374151;margin-top:8px}
-      </style>
-      <div class="card">
-        <h2>Ačiū! Jūsų užsakymas priimtas.</h2>
-        <p>Į el. paštą išsiuntėme sąskaitą su apmokėjimo nuoroda.</p>
-        <p class="note"><i>Užsakymas pradedamas vykdyti tik po apmokėjimo.</i></p>
-        <p>Norite apmokėti dabar? <br><a class="btn" href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
-        <a class="btn" href="https://www.raskdali.lt/">Grįžti į pradžią</a>
-      </div>
-    `);
-
-  } catch (e) {
-    console.error('ORDER FROM OFFER ERROR:', e);
-    res.status(500).send('Serverio klaida');
-  }
-});
-
-/* =======================================================
-   7) Servisai (PDF peržiūra, persiuntimas)
-   ======================================================= */
-app.get('/api/invoice/:orderid', async (req, res) => {
-  const orders = await loadOrders();
-  const o = orders[req.params.orderid];
-  if (!o) return res.status(404).send('Nerasta');
-  const invoiceNo = `RD-${new Date(o.ts).getFullYear()}-${req.params.orderid.slice(0,6).toUpperCase()}`;
-  const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items, total: o.total });
-  res.setHeader('Content-Type','application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="${invoiceNo}.pdf"`);
-  res.send(pdf);
-});
-
-app.post('/api/orders/:orderid/resend', async (req, res) => {
-  try {
-    const orders = await loadOrders();
-    const o = orders[req.params.orderid];
-    if (!o) return res.status(404).json({ error: 'Nerasta' });
-    if (!o.buyer?.email) return res.status(400).json({ error: 'Nėra kliento el. pašto' });
-
-    const amountCents = Math.round(o.total * 100);
-    const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/,'');
-    const accepturl = `${apiHost}/thanks?ok=1&o=${encodeURIComponent(req.params.orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
-    const cancelurl = `${apiHost}/thanks?ok=0&o=${encodeURIComponent(req.params.orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
-    const qp = new URLSearchParams({
-      version:'1', projectid:String(Number(process.env.PAYSERA_PROJECT_ID)),
-      orderid: req.params.orderid, amount:String(amountCents),
-      currency: process.env.PAYSERA_CURRENCY || 'EUR',
-      accepturl, cancelurl,
-      callbackurl: `${apiHost}/api/paysera/callback`,
-      test: process.env.PAYSERA_TEST === '1' ? '1' : '0'
-    }).toString();
-    const dataB64 = Buffer.from(qp).toString('base64');
-    const sign = crypto.createHash('md5').update(dataB64 + process.env.PAYSERA_PASSWORD).digest('hex');
-    const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(dataB64)}&sign=${sign}`;
-
-    const invoiceNo = `RD-${new Date(o.ts).getFullYear()}-${req.params.orderid.slice(0,6).toUpperCase()}`;
-    const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items, total: o.total });
-
-    await transporter.sendMail({
-      from: `"${SELLER.brand}" <${SELLER.email}>`,
-      to: o.buyer.email,
-      subject: `Sąskaita apmokėjimui – ${invoiceNo}`,
-      html: `
-        <h2>Užsakytos prekės</h2>
-        <ul>${o.items.map(it=>`<li><b>${escapeHtml(it.name)}</b> — ${eur(it.price)} €</li>`).join('')}</ul>
-        <p>Viso su PVM: <b>${eur(o.total)} €</b></p>
-        <p>Apmokėti: <a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
-        <p style="color:#374151"><i>Jei apmokėjote pateikdami užsakymą – nieko daryti nereikia.</i></p>
-        ${EMAIL_FOOTER_HTML}
-      `,
-      attachments: [{ filename: `${invoiceNo}.pdf`, content: pdf }]
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('RESEND ERROR', e);
-    res.status(500).json({ error: 'Nepavyko persiųsti' });
-  }
-});
-
-/* -------------------- Start -------------------- */
-app.listen(port, () => console.log('Serveris veikia ant port ' + port));
+  body{font-family:Arial, sans-serif

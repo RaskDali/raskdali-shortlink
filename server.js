@@ -257,9 +257,15 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
     if (buyer?.vat)   doc.text(`PVM kodas: ${buyer.vat}`, rightX);
     if (buyer?.email) doc.text(`El. paštas: ${buyer.email}`, rightX);
 
-    y = Math.max(doc.y, y) + 14;
-    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    y += 8;
+// --- FIKSUOJAM lentelės pradžią (kaip RRR pavyzdyje)
+const TABLE_START_Y = 250;
+
+// jeigu rekvizitai užėmė daugiau – nekertam jų, imam didesnę reikšmę
+y = Math.max(doc.y, TABLE_START_Y);
+
+// skiriamoji linija prieš lentelę
+doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+y += 8;
 
     // ---- Lentelės stulpelių x koordinatės (netankios – kad niekas nepersidengtų)
     const cols = {

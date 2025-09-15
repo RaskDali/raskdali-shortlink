@@ -166,167 +166,164 @@ const EMAIL_FOOTER_HTML = `
 function formatMoney(n) { return Number(n || 0).toFixed(2) + ' €'; }
 
 async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
-  const VAT = SELLER.vatRate; // 0.21
-  const sumGross = (items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty || 1)), 0);
-  const sumNet   = sumGross / (1 + VAT);
-  const sumVat   = sumGross - sumNet;
+  // Kainos items.price laikomos SU PVM. PVM tarifas iš SELLER.vatRate
+  const VAT = SELLER.vatRate || 0.21;
+
+  function sumGross(items) {
+    return (items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty || 1)), 0);
+  }
 
   return new Promise((resolve, reject) => {
-  const doc = new PDFDocument({ margin: 36 });
+    const doc = new PDFDocument({
+      margin: 36, // 0.5 inch
+      bufferPages: true
+    });
 
-  // --- Šriftai (LT diakritika) ---
-  const FONT_REG = path.join(__dirname, 'public', 'fonts', 'DejaVuSans.ttf');
-  const FONT_BOLD = path.join(__dirname, 'public', 'fonts', 'DejaVuSans-Bold.ttf');
-  try {
-    if (fsSync.existsSync(FONT_REG))  doc.registerFont('regular', FONT_REG);
-    if (fsSync.existsSync(FONT_BOLD)) doc.registerFont('bold', FONT_BOLD);
-  } catch {}
-  const useBold = fsSync.existsSync(FONT_BOLD);
-  const useReg  = fsSync.existsSync(FONT_REG);
-
-  const fontReg  = useReg  ? 'regular' : 'Helvetica';
-  const fontBold = useBold ? 'bold'    : 'Helvetica-Bold';
-  doc.font(fontReg).fillColor('#111');
-
+    // rinkti baitus
     const chunks = [];
     doc.on('data', b => chunks.push(b));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-      // --- Header
-  const startY = 36;
-  let headerBottomY = startY;
-
-  // LOGO
-  const LOGO_W = 140;
-  const LOGO_H = 40;
-  try {
-    if (fsSync.existsSync(LOGO_PATH)) {
-      doc.image(LOGO_PATH, 40, startY, { fit: [LOGO_W, LOGO_H] });
-      headerBottomY = Math.max(headerBottomY, startY + LOGO_H + 4);
+    // ---- Šriftai (su lietuviškom raidėm)
+    try {
+      doc.registerFont('Sans', FONT_REG);
+      doc.registerFont('SansBold', FONT_BOLD);
+    } catch (e) {
+      // jei kas, naudok built-in
+      console.error('FONT load error:', e);
     }
-  } catch {}
+    doc.font('Sans');
 
-  // Pavadinimas + numeris centre
-  doc.font(fontBold).fontSize(14).fillColor('#111')
-    .text('PVM SĄSKAITA – FAKTŪRA', 0, startY, { align: 'center' });
-  doc.moveDown(0.2);
-  doc.font(fontReg).fontSize(10).fillColor('#333')
-    .text(`Serija/NR: ${invoiceNo}`, { align: 'center' })
-    .text(`Išrašymo data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'center' });
-
-  headerBottomY = Math.max(headerBottomY, doc.y);
-
-  // skirtukas
-  doc.moveTo(36, headerBottomY + 12).lineTo(559, headerBottomY + 12)
-     .strokeColor('#e5e7eb').lineWidth(1).stroke();
-
-  // --- Pardavėjas / Pirkėjas
-  const leftX = 36, rightX = 316;
-  let y = headerBottomY + 24;
-
-  doc.font(fontBold).fontSize(11).fillColor('#111').text('Pardavėjas', leftX, y);
-  doc.font(fontReg).fontSize(10).fillColor('#333');
-  doc.text(SELLER.name, leftX, y + 14);
-  doc.text(SELLER.addr, leftX);
-  doc.text(`Įmonės kodas: ${SELLER.code}`, leftX);
-  doc.text(`PVM mok. kodas: ${SELLER.vat}`, leftX);
-  doc.text(`El. paštas: ${SELLER.email}`, leftX);
-
-  doc.font(fontBold).fontSize(11).fillColor('#111').text('Pirkėjas', rightX, y);
-  doc.font(fontReg).fontSize(10).fillColor('#333');
-  doc.text(buyer?.name || '', rightX, y + 14);
-  if (buyer?.addr)  doc.text(buyer.addr, rightX);
-  if (buyer?.code)  doc.text(`Įmonės kodas: ${buyer.code}`, rightX);
-  if (buyer?.vat)   doc.text(`PVM kodas: ${buyer.vat}`, rightX);
-  if (buyer?.email) doc.text(`El. paštas: ${buyer.email}`, rightX);
-
-  y = Math.max(doc.y, y) + 16;
-  doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-  y += 8;
-
-  // --- Lentelės header
-  // tvarkingesni stulpelių kraštai
-  const cols = {
-    name: 36,           // nuo 36 iki 320
-    qty:  320,          // 320–368
-    unitNet: 368,       // 368–452
-    vatAmt: 452,        // 452–520
-    lineGross: 520      // 520–559
-  };
-
-  function drawTableHeader(atY) {
-    doc.font(fontBold).fontSize(10).fillColor('#111');
-    doc.text('Produktas / paslauga', cols.name, atY, { width: cols.qty - cols.name - 6 });
-    doc.text('Kiekis', cols.qty, atY, { width: cols.unitNet - cols.qty - 6, align: 'right' });
-    doc.text('Vnt. kaina be PVM', cols.unitNet, atY, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
-    doc.text('PVM suma', cols.vatAmt, atY, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
-    doc.text('Suma su PVM', cols.lineGross, atY, { width: 559 - cols.lineGross - 6, align: 'right' });
-
-    const lineY = atY + 6;
-    doc.moveTo(36, lineY).lineTo(559, lineY).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    return lineY + 8;
-  }
-
-  // puslapio kontrolė (kai trūksta vietos – naujas puslapis + antraštė)
-  const BOTTOM = 780; // PDFKit default high is ~ 842; 780 saugu
-  function ensureSpace(extra = 28) {
-    if (doc.y + extra < BOTTOM) return;
-    doc.addPage({ margin: 36 });
-    y = 36; // naujo puslapio viršus
-    y = drawTableHeader(y);
-  }
-
-  y = drawTableHeader(y);
-
-  // --- Eilutės
-  (items || []).forEach((it) => {
-    const qty       = Number(it.qty || 1);
-    const grossUnit = Number(it.price || 0);
-    const netUnit   = grossUnit / (1 + VAT);
-    const vatUnit   = grossUnit - netUnit;
-
-    const lineGross = grossUnit * qty;
-    const lineVat   = vatUnit * qty;
-
-    ensureSpace(32);
-
-    doc.font(fontReg).fontSize(10).fillColor('#333');
-    doc.text(it.name || '', cols.name, y, { width: cols.qty - cols.name - 6 });
-    doc.text(qty.toString(), cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
-    doc.text(netUnit.toFixed(2) + ' €', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
-    doc.text(lineVat.toFixed(2) + ' €', cols.vatAmt, y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
-    doc.text(lineGross.toFixed(2) + ' €', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
-
-    y = doc.y + 3;
-
-    if (it.desc) {
-      ensureSpace(24);
-      doc.fillColor('#6b7280').fontSize(9)
-         .text(it.desc, cols.name + 12, y, { width: cols.qty - cols.name - 18 });
-      doc.font(fontReg).fontSize(10).fillColor('#333');
-      y = doc.y + 3;
+    // Kad niekas „neliptų“ – pagalbinė: jei mažai vietos, kurk naują puslapį ir nubrėžk viršutinę liniją
+    function ensureSpace(h) {
+      const bottom = doc.page.margins.bottom;
+      if (doc.y + h > doc.page.height - bottom) {
+        doc.addPage();
+      }
     }
 
-    doc.moveTo(36, y).lineTo(559, y).strokeColor('#f3f4f6').lineWidth(1).stroke();
+    // ---- Header (logo + antraštė)
+    const startY = 36;
+    let headerBottomY = startY;
+
+    try {
+      if (fsSync.existsSync(LOGO_PATH)) {
+        doc.image(LOGO_PATH, 36, startY, { fit: [140, 40] });
+        headerBottomY = Math.max(headerBottomY, startY + 44);
+      }
+    } catch {}
+
+    doc.font('SansBold').fontSize(14).fillColor('#111')
+      .text('PVM SĄSKAITA – FAKTŪRA', 0, startY, { align: 'center' });
+    doc.moveDown(0.2);
+    doc.font('Sans').fontSize(10).fillColor('#333')
+      .text(`Serija/NR: ${invoiceNo}`, { align: 'center' })
+      .text(`Išrašymo data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'center' });
+
+    headerBottomY = Math.max(headerBottomY, doc.y);
+    doc.moveTo(36, headerBottomY + 10).lineTo(559, headerBottomY + 10)
+      .strokeColor('#e5e7eb').lineWidth(1).stroke();
+
+    // ---- Pardavėjas / Pirkėjas (du stulpai)
+    const leftX = 36, rightX = 316;
+    let y = headerBottomY + 22;
+
+    doc.font('SansBold').fontSize(11).fillColor('#111').text('Pardavėjas', leftX, y);
+    doc.font('Sans').fontSize(10).fillColor('#333');
+    doc.text(SELLER.name, leftX, y + 14);
+    doc.text(SELLER.addr, leftX);
+    doc.text(`Įmonės kodas: ${SELLER.code}`, leftX);
+    doc.text(`PVM mok. kodas: ${SELLER.vat}`, leftX);
+    doc.text(`El. paštas: ${SELLER.email}`, leftX);
+
+    doc.font('SansBold').fontSize(11).fillColor('#111').text('Pirkėjas', rightX, y);
+    doc.font('Sans').fontSize(10).fillColor('#333');
+    doc.text(buyer?.name || '', rightX, y + 14);
+    if (buyer?.addr)  doc.text(buyer.addr, rightX);
+    if (buyer?.code)  doc.text(`Įmonės kodas: ${buyer.code}`, rightX);
+    if (buyer?.vat)   doc.text(`PVM kodas: ${buyer.vat}`, rightX);
+    if (buyer?.email) doc.text(`El. paštas: ${buyer.email}`, rightX);
+
+    y = Math.max(doc.y, y) + 14;
+    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 8;
+
+    // ---- Lentelės stulpelių x koordinatės (netankios – kad niekas nepersidengtų)
+    const cols = {
+      name:      36,
+      qty:       320,
+      unitNet:   368,
+      vatAmt:    452,
+      lineGross: 520
+    };
+
+    // ---- Lentelės head
+    ensureSpace(26);
+    doc.font('SansBold').fontSize(10).fillColor('#111');
+    doc.text('Produktas / paslauga', cols.name, y, { width: cols.qty - cols.name - 6 });
+    doc.text('Kiekis',               cols.qty,  y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+    doc.text('Vnt. kaina be PVM',    cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
+    doc.text('PVM suma',             cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+    doc.text('Suma su PVM',          cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
     y += 6;
-  });
+    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 8;
 
-  // --- Suvestinė (visada nuo naujos vietos)
-  ensureSpace(80);
-  doc.font(fontBold).fontSize(10).fillColor('#111');
-  doc.text(`Iš viso be PVM: ${formatMoney(sumNet)}`, 0, y, { align: 'right' });
-  y += 14;
-  doc.text(`PVM (21%): ${formatMoney(sumVat)}`, 0, y, { align: 'right' });
-  y += 14;
-  doc.font(fontBold).fontSize(12).text(`Iš viso su PVM: ${formatMoney(sumGross)}`, 0, y, { align: 'right' });
+    // ---- Eilutės
+    doc.font('Sans').fontSize(10).fillColor('#333');
+    for (const it of (items || [])) {
+      ensureSpace(28);
 
-  // pasirinktinė pastaba (mokėjimo sąlygos ir t. t.)
-  y += 18;
-  doc.font(fontReg).fontSize(9).fillColor('#666')
-     .text('Mokėjimo sąlygos: apmokėti per 3 kalendorines dienas. Neapmokėti užsakymai nevykdomi. Prekių grąžinimo/keitimo tvarka – www.raskdali.lt.', 36, y, { width: 523 });
+      const qty       = Number(it.qty || 1);
+      const grossUnit = Number(it.price || 0);
+      const netUnit   = grossUnit / (1 + VAT);
+      const vatUnit   = grossUnit - netUnit;
 
-  doc.end();
+      const lineGross = grossUnit * qty;
+      const lineVat   = vatUnit * qty;
+
+      doc.text(it.name || '', cols.name, y, { width: cols.qty - cols.name - 6 });
+      doc.text(qty.toString(), cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+      doc.text(netUnit.toFixed(2) + ' €', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
+      doc.text(lineVat.toFixed(2) + ' €',  cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+      doc.text(lineGross.toFixed(2) + ' €', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
+      y = doc.y + 3;
+      if (it.desc) {
+        ensureSpace(18);
+        doc.fillColor('#6b7280').fontSize(9)
+          .text(it.desc, cols.name + 12, y, { width: cols.qty - cols.name - 18 });
+        doc.font('Sans').fontSize(10).fillColor('#333');
+        y = doc.y + 3;
+      }
+      doc.moveTo(36, y).lineTo(559, y).strokeColor('#f3f4f6').lineWidth(1).stroke();
+      y += 6;
+    }
+
+    // ---- Suvestinė
+    const gross = sumGross(items);
+    const net   = gross / (1 + VAT);
+    const vat   = gross - net;
+
+    y += 8;
+    ensureSpace(60);
+    doc.font('Sans').fontSize(10).fillColor('#111');
+    doc.text(`Iš viso be PVM: ${net.toFixed(2)} €`, 0, y, { align: 'right' });
+    y += 14;
+    doc.text(`PVM (${Math.round(VAT*100)}%): ${vat.toFixed(2)} €`, 0, y, { align: 'right' });
+    y += 14;
+    doc.font('SansBold').fontSize(12)
+       .text(`Iš viso su PVM: ${gross.toFixed(2)} €`, 0, y, { align: 'right' });
+
+    // (nebūtina) pastaba apačioj
+    y += 24;
+    ensureSpace(30);
+    doc.font('Sans').fontSize(9).fillColor('#6b7280')
+      .text('Pastaba: neapmokėti užsakymai nevykdomi. Apmokėjimo terminas – 14 kalendorinių dienų. www.raskdali.lt', 36, y, { width: 520 });
+
+    doc.end();
   });
 }
 

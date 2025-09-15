@@ -810,7 +810,9 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
     const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(dataB64)}&sign=${sign}`;
 
         // PDF sąskaita (prie laiško klientui/administratoriui)
-    const invoiceNo = `RD-${new Date().getFullYear()}-${orderid.slice(0,6).toUpperCase()}`;
+    const invoiceNo = await nextInvoiceNo();
+    ordersCache[orderid].invoiceNo = invoiceNo; // išsisaugom prie orderio
+    await saveJson(ORDERS_FILE, ordersCache);
     const pdfBuffer = await makeInvoicePdfBuffer({ invoiceNo, buyer, items });
 
     const detalesHtml = items.map(it =>

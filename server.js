@@ -391,7 +391,7 @@ async function finalizePaidOrder(orderid, reason = 'callback') {
   o.status = 'paid';
   await saveJson(ORDERS_FILE, ordersCache);
 
-  const invoiceNo = `RD-${new Date(o.ts).getFullYear()}-${orderid.slice(0, 6).toUpperCase()}`;
+  const invoiceNo = await nextInvoiceNo();
   const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
 
   const listHtml = o.items.map(it =>

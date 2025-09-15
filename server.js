@@ -284,35 +284,48 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
     y += 8;
 
     // ---- Eilutės
+doc.font('Sans').fontSize(10).fillColor('#333');
+for (const it of (items || [])) {
+  ensureSpace(28);
+
+  const qty       = Number(it.qty || 1);
+  const grossUnit = Number(it.price || 0);
+  const netUnit   = grossUnit / (1 + VAT);
+  const vatUnit   = grossUnit - netUnit;
+
+  const lineGross = grossUnit * qty;
+  const lineVat   = vatUnit * qty;
+
+  doc.text(it.name || '', cols.name, y, { width: cols.qty - cols.name - 6 });
+  doc.text(qty.toString(), cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+  doc.text(netUnit.toFixed(2) + ' €', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
+  doc.text(lineVat.toFixed(2) + ' €',  cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+  doc.text(lineGross.toFixed(2) + ' €', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
+  // BUVO:
+  // y = doc.y + 3;
+
+  // DABAR: pasiskaičiuojam žemiau esantį tašką visiems stulpeliams
+  const rowBottom = Math.max(
+    y + doc.heightOfString(it.name || '',        { width: cols.qty - cols.name - 6 }),
+    y + doc.heightOfString(qty.toString(),       { width: cols.unitNet - cols.qty - 6 }),
+    y + doc.heightOfString(netUnit.toFixed(2)+' €', { width: cols.vatAmt - cols.unitNet - 6 }),
+    y + doc.heightOfString(lineVat.toFixed(2)+' €',  { width: cols.lineGross - cols.vatAmt - 6 }),
+    y + doc.heightOfString(lineGross.toFixed(2)+' €', { width: 559 - cols.lineGross - 6 }),
+  );
+  y = rowBottom + 4; // šiek tiek atsitraukiam nuo teksto
+
+  if (it.desc) {
+    ensureSpace(18);
+    doc.fillColor('#6b7280').fontSize(9)
+      .text(it.desc, cols.name + 12, y, { width: cols.qty - cols.name - 18 });
     doc.font('Sans').fontSize(10).fillColor('#333');
-    for (const it of (items || [])) {
-      ensureSpace(28);
+    y = doc.y + 3;
+  }
 
-      const qty       = Number(it.qty || 1);
-      const grossUnit = Number(it.price || 0);
-      const netUnit   = grossUnit / (1 + VAT);
-      const vatUnit   = grossUnit - netUnit;
-
-      const lineGross = grossUnit * qty;
-      const lineVat   = vatUnit * qty;
-
-      doc.text(it.name || '', cols.name, y, { width: cols.qty - cols.name - 6 });
-      doc.text(qty.toString(), cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
-      doc.text(netUnit.toFixed(2) + ' €', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
-      doc.text(lineVat.toFixed(2) + ' €',  cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
-      doc.text(lineGross.toFixed(2) + ' €', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
-
-      y = doc.y + 3;
-      if (it.desc) {
-        ensureSpace(18);
-        doc.fillColor('#6b7280').fontSize(9)
-          .text(it.desc, cols.name + 12, y, { width: cols.qty - cols.name - 18 });
-        doc.font('Sans').fontSize(10).fillColor('#333');
-        y = doc.y + 3;
-      }
-      doc.moveTo(36, y).lineTo(559, y).strokeColor('#f3f4f6').lineWidth(1).stroke();
-      y += 6;
-    }
+  doc.moveTo(36, y).lineTo(559, y).strokeColor('#f3f4f6').lineWidth(1).stroke();
+  y += 6;
+}
 
     // ---- Suvestinė
     const gross = sumGross(items);

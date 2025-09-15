@@ -155,14 +155,19 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
     doc.on('error', reject);
 
     const startY = 36;
-    let headerBottomY = startY;
+let headerBottomY = startY;
 
-    try {
-      if (fsSync.existsSync(LOGO_PATH)) {
-        doc.image(LOGO_PATH, 40, startY, { width: 120 });
-        headerBottomY = Math.max(headerBottomY, startY + 60);
-      }
-    } catch {}
+// LOGO dydis (pakeisk čia – paprasčiausia vieta)
+const LOGO_W = 140;   // maksimalus plotis pt (≈ mm / 0.3527)
+const LOGO_H = 40;    // maksimalus aukštis pt
+
+try {
+  if (fsSync.existsSync(LOGO_PATH)) {
+    // 'fit' išlaiko proporcijas ir sutalpina į nurodytą rėmą
+    doc.image(LOGO_PATH, 40, startY, { fit: [LOGO_W, LOGO_H] });
+    headerBottomY = Math.max(headerBottomY, startY + LOGO_H + 4);
+  }
+} catch {}
 
     doc.fontSize(12).fillColor('#111').text('PVM SĄSKAITA–FAKTŪRA', 0, startY, { align: 'right' });
     doc.fontSize(10).fillColor('#333').text(`Serija/NR: ${invoiceNo}`, { align: 'right' });

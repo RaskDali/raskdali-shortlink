@@ -142,18 +142,19 @@ const EMAIL_FOOTER_HTML = `
 function formatMoney(n) { return Number(n || 0).toFixed(2) + ' €'; }
 
 async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
-  // visos kainos items.price laikomos SU PVM
-  const gross = (items || []).reduce((s, it) => s + (Number(it.price) || 0), 0);
-  const net = gross / (1 + SELLER.vatRate);
-  const vatAmt = gross - net;
+  const VAT = SELLER.vatRate; // 0.21
+  const sumGross = (items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty || 1)), 0);
+  const sumNet   = sumGross / (1 + VAT);
+  const sumVat   = sumGross - sumNet;
 
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40 });
+    const doc = new PDFDocument({ margin: 36 }); // truputį didesnė erdvė
     const chunks = [];
-    doc.on('data', (b) => chunks.push(b));
+    doc.on('data', b => chunks.push(b));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    // --- Header
     const startY = 36;
 let headerBottomY = startY;
 
@@ -169,81 +170,97 @@ try {
   }
 } catch {}
 
-    doc.fontSize(12).fillColor('#111').text('PVM SĄSKAITA–FAKTŪRA', 0, startY, { align: 'right' });
-    doc.fontSize(10).fillColor('#333').text(`Serija/NR: ${invoiceNo}`, { align: 'right' });
-    doc.text(`Išrašymo data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'right' });
+    doc.fontSize(14).fillColor('#111')
+      .text('PVM SĄSKAITA – FAKTŪRA', 0, startY, { align: 'center' });
+    doc.moveDown(0.2);
+    doc.fontSize(10).fillColor('#333')
+      .text(`Serija/NR: ${invoiceNo}`, { align: 'center' })
+      .text(`Išrašymo data: ${new Date().toLocaleDateString('lt-LT')}`, { align: 'center' });
 
-    doc.moveTo(40, headerBottomY + 20).lineTo(555, headerBottomY + 20).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    headerBottomY = Math.max(headerBottomY, doc.y);
 
-    const colLeftX = 40;
-    const colRightX = 320;
-    let y = headerBottomY + 34;
+    doc.moveTo(36, headerBottomY + 12).lineTo(559, headerBottomY + 12)
+      .strokeColor('#e5e7eb').lineWidth(1).stroke();
 
-    doc.fillColor('#111').fontSize(11).text('Pardavėjas:', colLeftX, y);
+    // --- Pardavėjas / Pirkėjas
+    const leftX = 36, rightX = 316;
+    let y = headerBottomY + 24;
+
+    doc.fontSize(11).fillColor('#111').text('Pardavėjas', leftX, y);
     doc.fontSize(10).fillColor('#333');
-    doc.text(SELLER.name, colLeftX, y + 14);
-    doc.text(SELLER.addr, colLeftX);
-    doc.text(`Įmonės kodas: ${SELLER.code}`, colLeftX);
-    doc.text(`PVM mok. kodas: ${SELLER.vat}`, colLeftX);
-    doc.text(`El. paštas: ${SELLER.email}`, colLeftX);
+    doc.text(SELLER.name, leftX, y + 14);
+    doc.text(SELLER.addr, leftX);
+    doc.text(`Įmonės kodas: ${SELLER.code}`, leftX);
+    doc.text(`PVM mok. kodas: ${SELLER.vat}`, leftX);
+    doc.text(`El. paštas: ${SELLER.email}`, leftX);
 
-    doc.fillColor('#111').fontSize(11).text('Pirkėjas:', colRightX, y);
+    doc.fontSize(11).fillColor('#111').text('Pirkėjas', rightX, y);
     doc.fontSize(10).fillColor('#333');
-    doc.text(buyer?.name || '', colRightX, y + 14);
-    if (buyer?.code) doc.text(`Įmonės kodas: ${buyer.code}`, colRightX);
-    if (buyer?.vat)  doc.text(`PVM kodas: ${buyer.vat}`, colRightX);
-    if (buyer?.addr) doc.text(`Adresas: ${buyer.addr}`, colRightX);
-    if (buyer?.email)doc.text(`El. paštas: ${buyer.email}`, colRightX);
+    doc.text(buyer?.name || '', rightX, y + 14);
+    if (buyer?.addr) doc.text(buyer.addr, rightX);
+    if (buyer?.code) doc.text(`Įmonės kodas: ${buyer.code}`, rightX);
+    if (buyer?.vat)  doc.text(`PVM kodas: ${buyer.vat}`, rightX);
+    if (buyer?.email)doc.text(`El. paštas: ${buyer.email}`, rightX);
 
-    y = doc.y + 16;
-    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    y += 10;
-
-    // Lentelės galvos
-    doc.fontSize(10).fillColor('#111');
-    doc.text('Produktas / paslauga', 40, y, { width: 270 });
-    doc.text('Kiekis', 315, y, { width: 40, align: 'right' });
-    doc.text('Vnt. kaina be PVM', 360, y, { width: 90, align: 'right' });
-    doc.text('PVM (21%)', 455, y, { width: 45, align: 'right' });
-    doc.text('Suma su PVM', 505, y, { width: 50, align: 'right' });
-    y += 6;
-    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y = Math.max(doc.y, y) + 16;
+    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
     y += 8;
 
-    // Eilutės
-    doc.fontSize(10).fillColor('#333');
-    (items || []).forEach((it) => {
-      const qty = Number(it.qty || 1);
-      const grossUnit = Number(it.price || 0);
-      const netUnit = grossUnit / (1 + SELLER.vatRate);
-      const vatUnit = grossUnit - netUnit;
-      const lineGross = grossUnit * qty;
-      const lineNet = netUnit * qty;
-      const lineVat = vatUnit * qty;
+    // --- Lentelės header
+    const cols = {
+      name: 36,
+      qty:  320,
+      unitNet: 368,
+      vatAmt: 452,
+      lineGross: 520
+    };
 
-      doc.text(it.name || '', 40, y, { width: 270 });
-      doc.text(String(qty), 315, y, { width: 40, align: 'right' });
-      doc.text((netUnit).toFixed(2) + ' €', 360, y, { width: 90, align: 'right' });
-      doc.text((lineVat).toFixed(2) + ' €', 455, y, { width: 45, align: 'right' });
-      doc.text((lineGross).toFixed(2) + ' €', 505, y, { width: 50, align: 'right' });
-      y = doc.y + 4;
+    doc.fontSize(10).fillColor('#111');
+    doc.text('Produktas / paslauga', cols.name, y, { width: cols.qty - cols.name - 6 });
+    doc.text('Kiekis', cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+    doc.text('Vnt. kaina be PVM', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
+    doc.text('PVM suma', cols.vatAmt, y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+    doc.text('Suma su PVM', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
+    y += 6;
+    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 8;
+
+    // --- Eilutės
+    (items || []).forEach((it) => {
+      const qty       = Number(it.qty || 1);
+      const grossUnit = Number(it.price || 0);
+      const netUnit   = grossUnit / (1 + VAT);
+      const vatUnit   = grossUnit - netUnit;
+
+      const lineGross = grossUnit * qty;
+      const lineVat   = vatUnit * qty;
+
+      doc.fontSize(10).fillColor('#333');
+      doc.text(it.name || '', cols.name, y, { width: cols.qty - cols.name - 6 });
+      doc.text(qty.toString(), cols.qty, y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+      doc.text(netUnit.toFixed(2) + ' €', cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
+      doc.text(lineVat.toFixed(2) + ' €', cols.vatAmt, y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+      doc.text(lineGross.toFixed(2) + ' €', cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
+      y = doc.y + 3;
       if (it.desc) {
-        doc.fillColor('#666').fontSize(9).text(it.desc, 60, y, { width: 300 });
+        doc.fillColor('#6b7280').fontSize(9).text(it.desc, cols.name + 12, y, { width: cols.qty - cols.name - 18 });
         doc.fontSize(10).fillColor('#333');
-        y = doc.y + 4;
+        y = doc.y + 3;
       }
-      doc.moveTo(40, y).lineTo(555, y).strokeColor('#f1f5f9').lineWidth(1).stroke();
-      y += 8;
+      doc.moveTo(36, y).lineTo(559, y).strokeColor('#f3f4f6').lineWidth(1).stroke();
+      y += 6;
     });
 
-    // Suvestinė
-    y += 8;
+    // --- Suvestinė
+    y += 6;
     doc.fontSize(10).fillColor('#111');
-    doc.text(`Iš viso be PVM: ${formatMoney(net)}`, 0, y, { align: 'right' });
+    doc.text(`Iš viso be PVM: ${formatMoney(sumNet)}`, 0, y, { align: 'right' });
     y += 14;
-    doc.text(`PVM (21%): ${formatMoney(vatAmt)}`, 0, y, { align: 'right' });
+    doc.text(`PVM (21%): ${formatMoney(sumVat)}`, 0, y, { align: 'right' });
     y += 14;
-    doc.fontSize(12).text(`Iš viso su PVM: ${formatMoney(gross)}`, 0, y, { align: 'right' });
+    doc.fontSize(12).text(`Iš viso su PVM: ${formatMoney(sumGross)}`, 0, y, { align: 'right' });
 
     doc.end();
   });

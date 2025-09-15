@@ -23,9 +23,14 @@ const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'public', 'logo.
 // Kiek pikselių aukščio piešti logotipą PDF sąskaitoje (keisk pagal poreikį)
 const LOGO_H = parseInt(process.env.LOGO_H || '52', 10);
 
-const DRAFTS_FILE = 'drafts.json'; // mokamų planų juodraščiai iki Payseros
-const ORDERS_FILE = 'orders.json'; // užsakymai iš pasiūlymų
-const OFFERS_FILE = 'offers.json'; // pasiūlymai (7 d.)
+// Visi duomenys bus laikomi diske (Render: /var/data). Lokaliai – ./data po projektu.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+const DRAFTS_FILE      = path.join(DATA_DIR, 'drafts.json');       // mokamų planų juodraščiai
+const ORDERS_FILE      = path.join(DATA_DIR, 'orders.json');       // užsakymai iš pasiūlymų
+const OFFERS_FILE      = path.join(DATA_DIR, 'offers.json');       // pasiūlymai (7 d.)
+const INVOICE_SEQ_FILE = path.join(DATA_DIR, 'invoice_seq.json');  // sąskaitų numeracijos skaitiklis
+
 
 /* ---------- App ---------- */
 const app = express();

@@ -122,6 +122,12 @@ async function loadJson(file) {
 async function saveJson(file, obj) {
   await atomicWrite(file, JSON.stringify(obj, null, 2));
 }
+// Įsitikinam, kad DATA_DIR egzistuoja
+async function ensureDataDir() {
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  } catch {}
+}
 
 // ---------- Invoice numbering ----------
 const INVOICE_SEQ_FILE = path.join(DATA_DIR, 'invoice_seq.json');

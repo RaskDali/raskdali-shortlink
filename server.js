@@ -126,7 +126,9 @@ async function saveJson(file, obj) {
 async function ensureDataDir() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch {}
+  } catch (e) {
+    console.error("Nepavyko sukurti DATA_DIR:", e);
+  }
 }
 
 // ---------- Invoice numbering ----------

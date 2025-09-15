@@ -389,10 +389,16 @@ async function finalizePaidOrder(orderid, reason = 'callback') {
   if (o.status === 'paid') return true;
 
   o.status = 'paid';
-  await saveJson(ORDERS_FILE, ordersCache);
 
-  const invoiceNo = await nextInvoiceNo();
-  const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
+// ✅ jei sąskaitos numerio dar nėra – sugeneruojam ir IŠSAUGOM prie užsakymo
+if (!o.invoiceNo) {
+  o.invoiceNo = await nextInvoiceNo(); // sugeneruos pvz. MAGRD2025-00001
+}
+await saveJson(ORDERS_FILE, ordersCache);
+
+// nuo čia visur naudokim būtent išsaugotą numerį
+const invoiceNo = o.invoiceNo;
+const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
 
   const listHtml = o.items.map(it =>
     `<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}</li>`

@@ -338,10 +338,12 @@ let offersCache = {};
 let ordersCache = {};
 
 await (async function ensureCaches() {
+  await ensureDataDir(); // <- pridedam
   draftsCache = await loadJson(DRAFTS_FILE);
   offersCache = await loadJson(OFFERS_FILE);
   ordersCache = await loadJson(ORDERS_FILE);
 })();
+
 
 /* ---------- Emails common ---------- */
 const topLogoHtml = `

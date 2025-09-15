@@ -270,18 +270,22 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
       lineGross: 520
     };
 
-    // ---- Lentelės head
-    ensureSpace(26);
-    doc.font('SansBold').fontSize(10).fillColor('#111');
-    doc.text('Produktas / paslauga', cols.name, y, { width: cols.qty - cols.name - 6 });
-    doc.text('Kiekis',               cols.qty,  y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
-    doc.text('Vnt. kaina be PVM',    cols.unitNet, y, { width: cols.vatAmt - cols.unitNet - 6, align: 'right' });
-    doc.text('PVM suma',             cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
-    doc.text('Suma su PVM',          cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+    // ---- Lentelės head (pataisyta, kad linija nepersibrauktų per tekstą)
+ensureSpace(28);
+doc.font('SansBold').fontSize(10).fillColor('#111');
 
-    y += 6;
-    doc.moveTo(36, y).lineTo(559, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
-    y += 8;
+doc.text('Produktas / paslauga', cols.name,    y, { width: cols.qty - cols.name - 6 });
+doc.text('Kiekis',               cols.qty,     y, { width: cols.unitNet - cols.qty - 6, align: 'right' });
+doc.text('Vnt. kaina be PVM',    cols.unitNet, y, { width: cols.vatAmt  - cols.unitNet - 6, align: 'right' });
+doc.text('PVM suma',             cols.vatAmt,  y, { width: cols.lineGross - cols.vatAmt - 6, align: 'right' });
+doc.text('Suma su PVM',          cols.lineGross, y, { width: 559 - cols.lineGross - 6, align: 'right' });
+
+// išmatuojam antraštės apačią ir nubrėžiam liniją žemiau teksto
+let headBottom = Math.max(doc.y, y) + 4;              // +4 px, kad nepaliestų raidžių „u, p, j“ uodegų
+doc.moveTo(36, headBottom).lineTo(559, headBottom)
+   .strokeColor('#e5e7eb').lineWidth(0.6).stroke();
+
+y = headBottom + 8;                                   // ir nuo jos pradedam pirmą eilutę
 
     // ---- Eilutės
 doc.font('Sans').fontSize(10).fillColor('#333');

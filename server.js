@@ -115,6 +115,27 @@ async function saveJson(file, obj) {
   await atomicWrite(file, JSON.stringify(obj, null, 2));
 }
 
+// ---------- Invoice numbering ----------
+const INVOICE_SEQ_FILE = 'invoice_seq.json'; 
+// Struktūra: { year: 2025, counter: 12 }
+
+async function nextInvoiceNo() {
+  let seq = await loadJson(INVOICE_SEQ_FILE);
+  const yr = new Date().getFullYear();
+
+  // jei pasikeitė metai – pradedam nuo nulio
+  if (!seq.year || seq.year !== yr) {
+    seq = { year: yr, counter: 0 };
+  }
+
+  seq.counter += 1;
+  await saveJson(INVOICE_SEQ_FILE, seq);
+
+  const prefix = 'MAGRD' + yr;  // prefiksas (gali pakeist į kitą)
+  const num = String(seq.counter).padStart(5, '0'); // pvz. 00001
+  return `${prefix}-${num}`;
+}
+
 /* ---------- Rekvizitai (pardavėjo) ---------- */
 const SELLER = {
   name: 'RaskDali / UAB „Magdaris“',

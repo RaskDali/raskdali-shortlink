@@ -888,7 +888,8 @@ app.get('/api/invoice/:orderid', async (req, res) => {
   try {
     const o = ordersCache[req.params.orderid];
     if (!o) return res.status(404).send('Nerasta');
-    const invoiceNo = `RD-${new Date(o.ts).getFullYear()}-${req.params.orderid.slice(0,6).toUpperCase()}`;
+    const invoiceNo = o.invoiceNo
+  ?? `MAGRD${new Date(o.ts).getFullYear()}-${req.params.orderid.slice(0,6).toUpperCase()}`; // atsarginis senesniems įrašams
     const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
     res.setHeader('Content-Type','application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${invoiceNo}.pdf"`);

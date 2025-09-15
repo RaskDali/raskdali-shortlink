@@ -132,7 +132,6 @@ async function ensureDataDir() {
 }
 
 // ---------- Invoice numbering ----------
-const INVOICE_SEQ_FILE = path.join(DATA_DIR, 'invoice_seq.json');
 // Struktūra: { year: 2025, counter: 12 }
 
 async function nextInvoiceNo() {

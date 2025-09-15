@@ -16,6 +16,9 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const FONT_REG  = path.join(__dirname, 'public', 'DejaVuSans.ttf');
+const FONT_BOLD = path.join(__dirname, 'public', 'DejaVuSans-Bold.ttf');
+
 const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'public', 'logo.png');
 // Kiek pikselių aukščio piešti logotipą PDF sąskaitoje (keisk pagal poreikį)
 const LOGO_H = parseInt(process.env.LOGO_H || '52', 10);

@@ -911,13 +911,16 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
     if (!o) return res.status(404).json({ error: 'Nerasta' });
     if (!o.buyer?.email) return res.status(400).json({ error: 'Nėra kliento el. pašto' });
 
+    // Paysera link
     const amountCents = Math.round((o.total || 0) * 100);
-    const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/,'');
+    const apiHost = (process.env.PUBLIC_API_HOST || 'https://raskdali-shortlink.onrender.com').replace(/\/+$/, '');
     const accepturl = `${apiHost}/thanks?ok=1&o=${encodeURIComponent(req.params.orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
     const cancelurl = `${apiHost}/thanks?ok=0&o=${encodeURIComponent(req.params.orderid)}&return=${encodeURIComponent('https://www.raskdali.lt/')}`;
     const qp = new URLSearchParams({
-      version:'1', projectid:String(Number(process.env.PAYSERA_PROJECT_ID)),
-      orderid: req.params.orderid, amount:String(amountCents),
+      version: '1',
+      projectid: String(Number(process.env.PAYSERA_PROJECT_ID)),
+      orderid: req.params.orderid,
+      amount: String(amountCents),
       currency: process.env.PAYSERA_CURRENCY || 'EUR',
       accepturl, cancelurl,
       callbackurl: `${apiHost}/api/paysera/callback`,
@@ -927,8 +930,8 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
     const sign = crypto.createHash('md5').update(dataB64 + process.env.PAYSERA_PASSWORD).digest('hex');
     const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(dataB64)}&sign=${sign}`;
 
-    const invoiceNo = o.invoiceNo
-  ?? `MAGRD${new Date(o.ts).getFullYear()}-${req.params.orderid.slice(0,6).toUpperCase()}`;
+    // Pastovus sąskaitos numeris (naudojam esamą, jei jau yra)
+    const invoiceNo = o.invoiceNo || `MAGRD${new Date(o.ts).getFullYear()}-${String(1).padStart(5, '0')}`; // fallback jei netyčia neįrašėm
     const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
 
     await transporter.sendMail({
@@ -938,7 +941,7 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
       html: `
         ${topLogoHtml}
         <h2>Jūsų pasirinktos prekės</h2>
-        <ul>${o.items.map(it=>`<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €</li>`).join('')}</ul>
+        <ul>${o.items.map(it => `<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €</li>`).join('')}</ul>
         <p>Viso su PVM: <b>${(o.total || 0).toFixed(2)} €</b></p>
         <p>Apmokėti: <a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
         <p style="color:#6b7280;font-size:13px">Jei jau apmokėjote, šios nuorodos spausti nereikia.</p>
@@ -947,10 +950,10 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
       attachments: [{ filename: `${invoiceNo}.pdf`, content: pdf, contentType: 'application/pdf' }]
     });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error('RESEND ERROR', e);
-    res.status(500).json({ error: 'Nepavyko persiųsti' });
+    return res.status(500).json({ error: 'Nepavyko persiųsti' });
   }
 });
 

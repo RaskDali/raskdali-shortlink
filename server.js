@@ -17,6 +17,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'public', 'logo.png');
+// Kiek pikselių aukščio piešti logotipą PDF sąskaitoje (keisk pagal poreikį)
+const LOGO_H = parseInt(process.env.LOGO_H || '52', 10);
 
 const DRAFTS_FILE = 'drafts.json'; // mokamų planų juodraščiai iki Payseros
 const ORDERS_FILE = 'orders.json'; // užsakymai iš pasiūlymų

@@ -231,10 +231,11 @@ const EMAIL_FOOTER_HTML = `
 /* ---------- PDF sąskaita (su PVM suvestine) ---------- */
 function formatMoney(n) { return Number(n || 0).toFixed(2) + ' €'; }
 
-async function makeInvoicePdfBuffer({ invoiceNo, buyer, items }) {
+// pridėjom footerNote ir includeReturns valdymą
+async function makeInvoicePdfBuffer({ invoiceNo, buyer, items, footerNote, includeReturns = true }) {
   // Kainos items.price laikomos SU PVM. PVM tarifas iš SELLER.vatRate
   const VAT = SELLER.vatRate || 0.21;
-
+  
   function sumGross(items) {
     return (items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty || 1)), 0);
   }
@@ -408,13 +409,22 @@ ensureSpace(30);
 doc.font('Sans').fontSize(10).fillColor('#374151')
   .text('Suma žodžiais: ' + eurosToWordsLt(gross), 36, y, { width: 520 });
 
-    // (nebūtina) pastaba apačioj
-    y += 24;
-    ensureSpace(30);
-    doc.font('Sans').fontSize(9).fillColor('#6b7280')
-      .text('Pastaba: neapmokėti užsakymai nevykdomi. Apmokėjimo terminas – 14 kalendorinių dienų. www.raskdali.lt', 36, y, { width: 520 });
+    // pabaigos pastabos
+y += 24;
+ensureSpace(40);
+const note = footerNote
+  || 'Pastaba: neapmokėti užsakymai nevykdomi. Apmokėjimo terminas – 14 kalendorinių dienų. www.raskdali.lt';
+doc.font('Sans').fontSize(9).fillColor('#6b7280')
+  .text(note, 36, y, { width: 520 });
 
-    doc.end();
+if (includeReturns) {
+  y = doc.y + 8;
+  ensureSpace(24);
+  doc.font('Sans').fontSize(9).fillColor('#6b7280')
+    .text('Grąžinimai: naujos prekės – per 14 d. nuo gavimo; naudotos – pagal garantijos/taisyklių sąlygas. Taisyklės: www.raskdali.lt/taisykles-ir-salygos', 36, y, { width: 520 });
+}
+
+doc.end();
   });
 }
 
@@ -491,7 +501,7 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
     attachments: adminAttachments,
   }).catch(e => console.error('MAIL admin draft err:', e));
 
-  // KLIENTUI
+    // KLIENTUI
   if (email) {
     const html = `
       ${topLogoHtml}
@@ -502,12 +512,74 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
       ${EMAIL_FOOTER_HTML}
     `;
     await transporter.sendMail({
-      from: `"RaskDali" <${SELLER.email}>`,
+      from: \`"RaskDali" <\${SELLER.email}>\`,
       to: email,
       subject: 'Jūsų užklausa apmokėta ir priimta – RaskDali',
       html,
     }).catch(e => console.error('MAIL client draft err:', e));
   }
+
+  /* ======= ČIA PRIDĖK ŠĮ BLOKĄ – PDF sąskaita planui ======= */
+  try {
+    // naudok tą pačią kainodarą kaip /api/uzklausa-start (centais)
+    const PLAN_AMOUNTS_CENTS = { Mini: 999, Standart: 2999, Pro: 5999 };
+    const priceEur = (PLAN_AMOUNTS_CENTS[plan] ?? PLAN_AMOUNTS_CENTS.Mini) / 100;
+
+    const invoiceNo = await nextInvoiceNo();
+    const buyerForPlan = { name: vardas || email || 'Klientas', email };
+
+    const planItems = [
+      { name: \`Plano „\${plan}“ mokestis\`, qty: 1, price: priceEur }
+    ];
+
+    // Pastaba pritaikyta apmokėtai sąskaitai
+    const pdfPlan = await makeInvoicePdfBuffer({
+      invoiceNo,
+      buyer: buyerForPlan,
+      items: planItems,
+      footerNote: 'Apmokėta internetu. Sąskaita sugeneruota elektroninėmis priemonėmis ir galioja be parašo.',
+      includeReturns: true
+    });
+
+    const attachPlan = [
+      { filename: \`\${invoiceNo}.pdf\`, content: pdfPlan, contentType: 'application/pdf' }
+    ];
+
+    // Adminui
+    await transporter.sendMail({
+      from: \`"RaskDali" <\${SELLER.email}>\`,
+      to: SELLER.email,
+      subject: \`Plano apmokėjimas – \${plan} (\${invoiceNo})\`,
+      html: \`
+        \${topLogoHtml}
+        <div style="font-family:Arial,sans-serif;font-size:14px">
+          <p>Gautas plano apmokėjimas (\${escapeHtml(plan)}), order \${escapeHtml(orderid)}.</p>
+        </div>\`,
+      attachments: attachPlan
+    }).catch(e => console.error('MAIL admin plan-invoice err:', e));
+
+    // Klientui su PDF
+    if (email) {
+      await transporter.sendMail({
+        from: \`"RaskDali" <\${SELLER.email}>\`,
+        to: email,
+        subject: \`Sąskaita – \${invoiceNo}\`,
+        html: \`
+          \${topLogoHtml}
+          <div style="font-family:Arial,sans-serif;font-size:14px">
+            <h2>Ačiū! Mokėjimas gautas ✅</h2>
+            <p>Prisegame sąskaitą PDF formatu.</p>
+          </div>
+          \${EMAIL_FOOTER_HTML}
+        \`,
+        attachments: attachPlan
+      }).catch(e => console.error('MAIL client plan-invoice err:', e));
+    }
+  } catch (e) {
+    console.error('Plano PDF/siuntimo klaida:', e);
+  }
+  /* ======= /BLOKO PABAIGA ======= */
+
 
   draft.emailed = true;
   delete draftsCache[orderid];
@@ -531,7 +603,13 @@ await saveJson(ORDERS_FILE, ordersCache);
 
 // nuo čia visur naudokim būtent išsaugotą numerį
 const invoiceNo = o.invoiceNo;
-const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
+const pdf = await makeInvoicePdfBuffer({
+  invoiceNo,
+  buyer: o.buyer,
+  items: o.items,
+  footerNote: 'Apmokėta internetu. Sąskaita sugeneruota elektroninėmis priemonėmis ir galioja be parašo.',
+  includeReturns: true
+});
 
   const listHtml = o.items.map(it =>
     `<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}</li>`
@@ -948,50 +1026,41 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
     const sign = crypto.createHash('md5').update(dataB64 + process.env.PAYSERA_PASSWORD).digest('hex');
     const payUrl = `https://bank.paysera.com/pay/?data=${encodeURIComponent(dataB64)}&sign=${sign}`;
 
-        // PDF sąskaita (prie laiško klientui/administratoriui)
-    const invoiceNo = await nextInvoiceNo();
-    ordersCache[orderid].invoiceNo = invoiceNo; // išsisaugom prie orderio
-    await saveJson(ORDERS_FILE, ordersCache);
-    const pdfBuffer = await makeInvoicePdfBuffer({ invoiceNo, buyer, items });
-
     const detalesHtml = items.map(it =>
       `<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}</li>`
     ).join('');
 
     // ADMIN
-    transporter.sendMail({
-      from: `"RaskDali" <${SELLER.email}>`,
-      to: SELLER.email,
-      subject: `Naujas užsakymas – ${buyer.name || 'klientas'} (order ${orderid})`,
-      html: `
-        ${topLogoHtml}
-        <h3>Gautas užsakymas</h3>
-        <p><b>OrderID:</b> ${orderid}</p>
-        <ul>${detalesHtml}</ul>
-        <p><b>Viso su PVM:</b> ${total.toFixed(2)} €</p>
-        <p><a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
-      `,
-      attachments: [{ filename: `${invoiceNo}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-    }).catch(e => console.error('offer→admin mail err:', e));
+  transporter.sendMail({
+  from: `"RaskDali" <${SELLER.email}>`,
+  to: SELLER.email,
+  subject: `Naujas užsakymas – ${buyer.name || 'klientas'} (order ${orderid})`,
+  html: `
+    ${topLogoHtml}
+    <h3>Gautas užsakymas</h3>
+    <p><b>OrderID:</b> ${orderid}</p>
+    <ul>${detalesHtml}</ul>
+    <p><b>Viso su PVM:</b> ${total.toFixed(2)} €</p>
+    <p><a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
+  `
+}).catch(e => console.error('offer→admin mail err:', e));
 
     // KLIENTUI (su pastaba „jei jau apmokėjote – nuorodos spausti nereikia“)
     if (email) {
-      transporter.sendMail({
-        from: `"RaskDali" <${SELLER.email}>`,
-        to: email,
-        subject: `Sąskaita apmokėjimui – ${invoiceNo}`,
-        html: `
-          ${topLogoHtml}
-          <h2>Jūsų pasirinktos prekės</h2>
-          <ul>${detalesHtml}</ul>
-          <p>Viso su PVM: <b>${total.toFixed(2)} €</b></p>
-          <p>Norėdami apmokėti, spauskite: <a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>
-          <p style="color:#6b7280;font-size:13px">Jei <b>jau apmokėjote iškart</b> po užsakymo pateikimo, <b>šios nuorodos spausti nereikia</b>. Neapmokėti užsakymai nevykdomi.</p>
-          <p>Prisegame sąskaitą PDF formatu.</p>
-          ${EMAIL_FOOTER_HTML}
-        `,
-        attachments: [{ filename: `${invoiceNo}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-      }).catch(e => console.error('offer→client mail err:', e));
+     transporter.sendMail({
+  from: `"RaskDali" <${SELLER.email}>`,
+  to: email,
+  subject: `Užsakymo santrauka – apmokėkite`,
+  html: buildPayNowEmail({
+    title: 'Jūsų užsakymo santrauka',
+    items,
+    total,
+    buyer,
+    payUrl
+  })
+  // attachments: []  // iki apmokėjimo – be priedų
+})
+.catch(e => console.error('offer→client mail err:', e));
     }
 
     // „Ačiū“ dėžutė (aiškiai įvardinta, kad tai užsakymas)
@@ -1030,7 +1099,16 @@ app.get('/api/invoice/:orderid', async (req, res) => {
       await saveJson(ORDERS_FILE, ordersCache);
     }
 
-    const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
+    const pdf = await makeInvoicePdfBuffer({
+  invoiceNo,
+  buyer: o.buyer,
+  items: o.items,
+  footerNote: o.status === 'paid'
+    ? 'Apmokėta internetu. Sąskaita sugeneruota elektroninėmis priemonėmis ir galioja be parašo.'
+    : undefined,
+  includeReturns: true
+});
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${invoiceNo}.pdf"`);
     res.send(pdf);
@@ -1068,7 +1146,15 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
 
     // Pastovus sąskaitos numeris (naudojam esamą, jei jau yra)
     const invoiceNo = o.invoiceNo || `MAGRD${new Date(o.ts).getFullYear()}-${String(1).padStart(5, '0')}`; // fallback jei netyčia neįrašėm
-    const pdf = await makeInvoicePdfBuffer({ invoiceNo, buyer: o.buyer, items: o.items });
+    const pdf = await makeInvoicePdfBuffer({
+  invoiceNo,
+  buyer: o.buyer,
+  items: o.items,
+  footerNote: o.status === 'paid'
+    ? 'Apmokėta internetu. Sąskaita sugeneruota elektroninėmis priemonėmis ir galioja be parašo.'
+    : undefined,
+  includeReturns: true
+});
 
     await transporter.sendMail({
       from: `"RaskDali" <${SELLER.email}>`,

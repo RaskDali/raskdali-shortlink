@@ -519,7 +519,7 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
     }).catch(e => console.error('MAIL client draft err:', e));
   }
 
-  /* ======= ČIA PRIDĖK ŠĮ BLOKĄ – PDF sąskaita planui ======= */
+    /* ======= PDF sąskaita planui po apmokėjimo ======= */
   try {
     // naudok tą pačią kainodarą kaip /api/uzklausa-start (centais)
     const PLAN_AMOUNTS_CENTS = { Mini: 999, Standart: 2999, Pro: 5999 };
@@ -529,10 +529,9 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
     const buyerForPlan = { name: vardas || email || 'Klientas', email };
 
     const planItems = [
-      { name: \`Plano „\${plan}“ mokestis\`, qty: 1, price: priceEur }
+      { name: `Plano „${plan}“ mokestis`, qty: 1, price: priceEur }
     ];
 
-    // Pastaba pritaikyta apmokėtai sąskaitai
     const pdfPlan = await makeInvoicePdfBuffer({
       invoiceNo,
       buyer: buyerForPlan,
@@ -542,36 +541,36 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
     });
 
     const attachPlan = [
-      { filename: \`\${invoiceNo}.pdf\`, content: pdfPlan, contentType: 'application/pdf' }
+      { filename: `${invoiceNo}.pdf`, content: pdfPlan, contentType: 'application/pdf' }
     ];
 
     // Adminui
     await transporter.sendMail({
-      from: \`"RaskDali" <\${SELLER.email}>\`,
+      from: `"RaskDali" <${SELLER.email}>`,
       to: SELLER.email,
-      subject: \`Plano apmokėjimas – \${plan} (\${invoiceNo})\`,
-      html: \`
-        \${topLogoHtml}
+      subject: `Plano apmokėjimas – ${plan} (${invoiceNo})`,
+      html: `
+        ${topLogoHtml}
         <div style="font-family:Arial,sans-serif;font-size:14px">
-          <p>Gautas plano apmokėjimas (\${escapeHtml(plan)}), order \${escapeHtml(orderid)}.</p>
-        </div>\`,
+          <p>Gautas plano apmokėjimas (${escapeHtml(plan)}), order ${escapeHtml(orderid)}.</p>
+        </div>`,
       attachments: attachPlan
     }).catch(e => console.error('MAIL admin plan-invoice err:', e));
 
     // Klientui su PDF
     if (email) {
       await transporter.sendMail({
-        from: \`"RaskDali" <\${SELLER.email}>\`,
+        from: `"RaskDali" <${SELLER.email}>`,
         to: email,
-        subject: \`Sąskaita – \${invoiceNo}\`,
-        html: \`
-          \${topLogoHtml}
+        subject: `Sąskaita – ${invoiceNo}`,
+        html: `
+          ${topLogoHtml}
           <div style="font-family:Arial,sans-serif;font-size:14px">
             <h2>Ačiū! Mokėjimas gautas ✅</h2>
             <p>Prisegame sąskaitą PDF formatu.</p>
           </div>
-          \${EMAIL_FOOTER_HTML}
-        \`,
+          ${EMAIL_FOOTER_HTML}
+        `,
         attachments: attachPlan
       }).catch(e => console.error('MAIL client plan-invoice err:', e));
     }
@@ -579,6 +578,7 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
     console.error('Plano PDF/siuntimo klaida:', e);
   }
   /* ======= /BLOKO PABAIGA ======= */
+
 
 
   draft.emailed = true;

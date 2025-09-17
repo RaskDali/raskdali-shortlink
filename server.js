@@ -402,6 +402,12 @@ for (const it of (items || [])) {
     doc.font('SansBold').fontSize(12)
        .text(`Iš viso su PVM: ${gross.toFixed(2)} €`, 0, y, { align: 'right' });
 
+// Suma žodžiais
+y += 16;
+ensureSpace(30);
+doc.font('Sans').fontSize(10).fillColor('#374151')
+  .text('Suma žodžiais: ' + eurosToWordsLt(gross), 36, y, { width: 520 });
+
     // (nebūtina) pastaba apačioj
     y += 24;
     ensureSpace(30);

@@ -74,6 +74,60 @@ function escapeHtml(str) {
     .replaceAll("'", '&#39;');
 }
 
+// ---- LT suma žodžiais (eurai + centai)
+function eurosToWordsLt(amount) {
+  const units = ['nulis','vienas','du','trys','keturi','penki','šeši','septyni','aštuoni','devyni'];
+  const teens = ['dešimt','vienuolika','dvylika','trylika','keturiolika','penkiolika','šešiolika','septyniolika','aštuoniolika','devyniolika'];
+  const tens  = ['','', 'dvidešimt','trisdešimt','keturiasdešimt','penkiasdešimt','šešiasdešimt','septyniasdešimt','aštuoniasdešimt','devyniasdešimt'];
+  const hundreds = ['','šimtas','du šimtai','trys šimtai','keturi šimtai','penki šimtai','šeši šimtai','septyni šimtai','aštuoni šimtai','devyni šimtai'];
+
+  function form(n, vnt, dgs, kil) { // 1, 2-9, 0/10-19
+    if (n % 100 >= 10 && n % 100 <= 19) return kil;
+    const u = n % 10;
+    if (u === 1) return vnt;
+    if (u >= 2 && u <= 9) return dgs;
+    return kil;
+  }
+  function upTo999(n) {
+    const h = Math.floor(n/100), r = n%100;
+    let out = [];
+    if (h) out.push(hundreds[h]);
+    if (r >= 10 && r <= 19) out.push(teens[r-10]);
+    else {
+      const t = Math.floor(r/10), u = r%10;
+      if (t) out.push(tens[t]);
+      if (u) out.push(units[u]);
+      if (!t && !u && !h) out.push(units[0]);
+    }
+    return out.join(' ').trim();
+    }
+
+  function chunk(n, i) { // tūkstančiai, milijonai …
+    const words = upTo999(i);
+    if (i === 0) return '';
+    if (n === 1000)  return words + ' ' + form(i,'tūkstantis','tūkstančiai','tūkstančių');
+    if (n === 1000000) return words + ' ' + form(i,'milijonas','milijonai','milijonų');
+    return words;
+  }
+
+  const euros = Math.floor(Number(amount) || 0);
+  const cents = Math.round(((Number(amount) || 0) - euros) * 100);
+
+  // eurai iki milijonų
+  const parts = [];
+  const mln = Math.floor(euros / 1_000_000);
+  const th  = Math.floor((euros % 1_000_000) / 1_000);
+  const rest = euros % 1000;
+  if (mln)  parts.push(chunk(1_000_000, mln));
+  if (th)   parts.push(chunk(1000, th));
+  if (rest || (!mln && !th)) parts.push(upTo999(rest));
+
+  const eurWord = form(euros, 'euras', 'eurai', 'eurų');
+  const ctWord  = form(cents, 'centas', 'centai', 'centų');
+
+  return `${parts.join(' ')} ${eurWord} ${cents ? (upTo999(cents) + ' ' + ctWord) : ''}`.trim();
+}
+
 function buildQuery(obj) {
   return Object.entries(obj)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)

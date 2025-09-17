@@ -512,7 +512,7 @@ async function finalizePaidDraft(orderid, reason = 'unknown') {
       ${EMAIL_FOOTER_HTML}
     `;
     await transporter.sendMail({
-      from: \`"RaskDali" <\${SELLER.email}>\`,
+      from: '"RaskDali" <' + SELLER.email + '>',
       to: email,
       subject: 'Jūsų užklausa apmokėta ir priimta – RaskDali',
       html,

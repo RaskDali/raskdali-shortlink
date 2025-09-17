@@ -227,6 +227,28 @@ const EMAIL_FOOTER_HTML = `
     <div style="margin-top:8px">Turite klausimų? <b>Atsakykite į šį laišką</b>.</div>
   </div>
 `;
+function buildPayNowEmail({ title, items, total, buyer, payUrl }) {
+  const list = (items || []).map(it => `
+    <li>
+      <b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €
+      ${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}
+    </li>
+  `).join('');
+
+  return `
+    ${topLogoHtml}
+    <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#111">
+      <h2 style="margin:6px 0 10px 0">${escapeHtml(title || 'Užsakymo santrauka')}</h2>
+      <p><b>Pirkėjas:</b> ${escapeHtml(buyer?.name || '')}${buyer?.email ? ` · <a href="mailto:${escapeHtml(buyer.email)}">${escapeHtml(buyer.email)}</a>` : ''}</p>
+      <ul>${list}</ul>
+      <p style="font-size:15px"><b>Viso su PVM:</b> ${Number(total || 0).toFixed(2)} €</p>
+      <p><a href="${escapeHtml(payUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;border-radius:10px;background:#436BAA;color:#fff;text-decoration:none;font-weight:600">Apmokėti per Paysera</a></p>
+      <p style="color:#6b7280;font-size:13px;margin-top:6px">Jei jau apmokėjote, šios nuorodos spausti nereikia.</p>
+    </div>
+    ${EMAIL_FOOTER_HTML}
+  `;
+}
+
 
 /* ---------- PDF sąskaita (su PVM suvestine) ---------- */
 function formatMoney(n) { return Number(n || 0).toFixed(2) + ' €'; }
@@ -969,9 +991,29 @@ app.get('/klientoats/:id', (req, res) => {
       <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
       ${rowsHtml || '<div class="small">Pasiūlymas tuščias.</div>'}
       <button type="submit" class="btn" style="margin-top:12px">Užsakyti pasirinktas</button>
-      <a href="${escapeHtml(home)}" style="margin-left:10px">Į pradžią</a>
-    </form>
+<div id="chooseErr" class="warn" style="display:none;margin-top:10px">
+  Nepasirinkta nei viena prekė – pažymėkite bent vieną.
+</div>
+<a href="${escapeHtml(home)}" style="margin-left:10px">Į pradžią</a>
+       </form>
   </div>
+<script>
+  (function () {
+    const form = document.querySelector('form[action^="/klientoats/"][method="POST"]');
+    const errBox = document.getElementById('chooseErr');
+    if (!form || !errBox) return;
+
+    form.addEventListener('submit', function (e) {
+      const hasAny = !!form.querySelector('input[name="choose"]:checked');
+      if (!hasAny) {
+        e.preventDefault();
+        errBox.style.display = 'block';
+        errBox.textContent = 'Nepasirinkta nei viena prekė – pažymėkite bent vieną.';
+        errBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, false);
+  })();
+</script>
 </body></html>`);
 });
 
@@ -981,8 +1023,27 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
     const offer = offersCache[req.params.id];
     if (!offer) return res.status(404).send('Nerasta');
 
-    const choose = req.body.choose ? (Array.isArray(req.body.choose) ? req.body.choose : [req.body.choose]) : [];
-    if (!choose.length) return res.status(400).send('Nepasirinkta nei viena detalė');
+    const chooseRaw = req.body.choose ? (Array.isArray(req.body.choose) ? req.body.choose : [req.body.choose]) : [];
+const idxs = chooseRaw
+  .map(v => parseInt(v, 10))
+  .filter(n => Number.isInteger(n) && n >= 0);
+
+if (!idxs.length) {
+  return res.status(400).send(`
+    <meta charset="utf-8">
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#fff;margin:0;display:grid;place-items:center;height:100dvh}
+      .card{max-width:640px;padding:28px;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 8px 30px #00000014;text-align:center}
+      .warn{color:#9a3412}
+      a.btn,button.btn{display:inline-block;margin-top:16px;padding:12px 18px;border-radius:12px;background:#436BAA;color:#fff;text-decoration:none;font-weight:600;border:none;cursor:pointer}
+    </style>
+    <div class="card">
+      <h2 class="warn">Nepasirinkta nei viena prekė</h2>
+      <p>Pažymėkite bent vieną detalę ir bandykite dar kartą.</p>
+      <button class="btn" onclick="history.back()">Grįžti į pasiūlymą</button>
+    </div>
+  `);
+}
 
     const name    = (req.body.vardas || '').trim();
     const email   = (req.body.email || '').trim();
@@ -997,11 +1058,11 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
     };
 
     let total = 0;
-    const items = choose.map(i => offer.items[i]).filter(Boolean).map(it => {
-      const price = parseFloat(String(it?.['price-vat'] ?? '0').replace(',', '.')) || 0;
-      total += price;
-      return { name: it?.name || '', desc: it?.desc || '', price, qty: 1 };
-    });
+  const items = idxs.map(i => offer.items[i]).filter(Boolean).map(it => {
+  const price = parseFloat(String(it?.['price-vat'] ?? '0').replace(',', '.')) || 0;
+  total += price;
+  return { name: it?.name || '', desc: it?.desc || '', price, qty: 1 };
+});
 
     const orderid = nanoid();
     ordersCache[orderid] = { ts: Date.now(), offerId: req.params.id, buyer, items, total, status: 'pending_payment' };

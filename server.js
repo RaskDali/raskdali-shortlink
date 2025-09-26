@@ -906,9 +906,29 @@ app.post('/api/uzklausa-free', uploadFree.any(), handleFreeRequest);
 /* ---------- 5) Pasiūlymai (7 d. galiojimas) ---------- */
 app.post('/api/sukurti-pasiulyma', async (req, res) => {
   try {
-    const data = req.body; // { items: [...] }
+    // Tikimės { items:[...], shipping?: { label, price } }
+    const data = req.body;
     const id = nanoid(6);
-    offersCache[id] = { ...data, createdAt: Date.now() };
+
+    // Normalizuojam shipping (neprivalomas)
+    let shipping = undefined;
+    if (data.shipping && (typeof data.shipping === 'object')) {
+      const label = String(data.shipping.label ?? '').trim();
+      const price = Number(data.shipping.price ?? 0);
+      if (label || Number.isFinite(price)) {
+        shipping = {
+          label: label || 'Pristatymas',
+          price: Number.isFinite(price) && price >= 0 ? price : 0
+        };
+      }
+    }
+
+    offersCache[id] = {
+      items: Array.isArray(data.items) ? data.items : [],
+      shipping,                  // ← vienas, tavo parinktas pristatymas (arba nenurodytas)
+      createdAt: Date.now()
+    };
+
     await saveJson(OFFERS_FILE, offersCache);
     res.json({ link: `https://raskdali-shortlink.onrender.com/klientoats/${id}` });
   } catch (e) {
@@ -988,8 +1008,24 @@ app.get('/klientoats/:id', (req, res) => {
 
       <div class="warn">Dėmesio: <b>neapmokėti užsakymai nevykdomi.</b> Galite <b>apmokėti iškart žemiau</b> arba laukti <b>el. laiško</b> su nuoroda ir PDF sąskaita.</div>
 
-      <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-      ${rowsHtml || '<div class="small">Pasiūlymas tuščias.</div>'}
+<!-- Pristatymas (tik rodymas, be pasirinkimo) -->
+${(() => {
+  const s = offer.shipping;
+  if (!s) return '';
+  const price = Number(s.price || 0);
+  const label = s.label ? escapeHtml(s.label) : 'Pristatymas';
+  const eur = price.toFixed(2).replace('.', ',') + ' €';
+  return `
+    <div style="margin:14px 0">
+      <div style="font-weight:600;margin-bottom:6px">Pristatymas</div>
+      <div>${label}: <b>${eur}</b></div>
+    </div>
+  `;
+})()}
+
+<hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+
+${rowsHtml || '<div class="small">Pasiūlymas tuščias.</div>'}
       <button type="submit" class="btn" style="margin-top:12px">Užsakyti pasirinktas</button>
 <div id="chooseErr" class="warn" style="display:none;margin-top:10px">
   Nepasirinkta nei viena prekė – pažymėkite bent vieną.
@@ -1063,6 +1099,16 @@ if (!idxs.length) {
   total += price;
   return { name: it?.name || '', desc: it?.desc || '', price, qty: 1 };
 });
+
+    // Jei pasiūlymas turi nustatytą pristatymą – įtraukiam
+if (offer.shipping && (typeof offer.shipping === 'object')) {
+  const shipLabel = String(offer.shipping.label ?? 'Pristatymas');
+  const shipPrice = Number(offer.shipping.price ?? 0);
+  if (Number.isFinite(shipPrice) && shipPrice >= 0) {
+    items.push({ name: shipLabel, desc: '', price: shipPrice, qty: 1 });
+    total += shipPrice;
+  }
+}
 
     const orderid = nanoid();
     ordersCache[orderid] = { ts: Date.now(), offerId: req.params.id, buyer, items, total, status: 'pending_payment' };

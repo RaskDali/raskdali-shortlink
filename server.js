@@ -68,10 +68,15 @@ const transporter = nodemailer.createTransport({
   maxMessages: 100,
   socketTimeout: 20000,
 });
-transporter.verify().then(
-  () => console.log('SMTP OK'),
-  (e) => console.error('SMTP ERROR:', e?.message || e)
-);
+// vietoj buvusio transporter.verify()...
+if (process.env.MAIL_HOST && process.env.MAIL_USER && process.env.MAIL_PASS) {
+  transporter.verify().then(
+    () => console.log('SMTP OK'),
+    (e) => console.error('SMTP ERROR:', e?.message || e)
+  );
+} else {
+  console.warn('SMTP disabled: MAIL_HOST/USER/PASS not set – emails will still try to send, but may fail.');
+}
 
 /* ---------- Helpers ---------- */
 function escapeHtml(str) {
@@ -373,11 +378,6 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items, footerNote, inclu
 let draftsCache = {};
 let offersCache = {};
 let ordersCache = {};
-
-await ensureDirs();
-draftsCache = await loadJson(DRAFTS_FILE);
-offersCache = await loadJson(OFFERS_FILE);
-ordersCache = await loadJson(ORDERS_FILE);
 
 /* ---------- Multer storages ---------- */
 // Mokami planai / free – failus KELIAM Į DISKĄ (nebe base64 į JSON) – mažiau RAM
@@ -1122,5 +1122,31 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
   }
 });
 
-/* ---------- Start ---------- */
-app.listen(PORT, () => console.log('Serveris veikia ant port ' + PORT));
+/* ---------- Start (be top-level await) ---------- */
+async function boot() {
+  try {
+    // jeigu turi ensureDirs arba ensureDataDir – kviesk juos čia
+    if (typeof ensureDirs === 'function') {
+      await ensureDirs();
+    } else if (typeof ensureDataDir === 'function') {
+      await ensureDataDir();
+    }
+
+    // užkraunam kešus čia, ne top-level
+    draftsCache = await loadJson(DRAFTS_FILE);
+    offersCache  = await loadJson(OFFERS_FILE);
+    ordersCache  = await loadJson(ORDERS_FILE);
+
+    app.listen(port, () => console.log('Serveris veikia ant port ' + port));
+  } catch (err) {
+    console.error('BOOT ERROR:', err);
+    process.exit(1);
+  }
+}
+
+boot();
+
+// saugikliai, kad netyčinės klaidos nenuverstų proceso tyliai
+process.on('uncaughtException', (e) => console.error('UNCAUGHT', e));
+process.on('unhandledRejection', (e) => console.error('UNHANDLED REJECTION', e));
+

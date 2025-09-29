@@ -836,18 +836,18 @@ app.get('/klientoats/:id', (req, res) => {
       <div class="warn">Dėmesio: <b>neapmokėti užsakymai nevykdomi.</b> Galite <b>apmokėti iškart žemiau</b> arba laukti <b>el. laiško</b> su nuoroda ir PDF sąskaita.</div>
 
       ${(() => {
-        const s = offer.shipping;
-        if (!s) return '';
-        const price = Number(s.price || 0);
-        const label = s.label ? ${'`'}${'${escapeHtml(s.label)}'}${'`'} : 'Pristatymas';
-        const eur = price.toFixed(2).replace('.', ',') + ' €';
-        return `
-          <div style="margin:14px 0">
-            <div style="font-weight:600;margin-bottom:6px">Pristatymas</div>
-            <div>${'${label}'}: <b>${'${eur}'}</b></div>
-          </div>
-        `;
-      })()}
+  const s = offer.shipping;
+  if (!s) return '';
+  const price = Number(s.price || 0);
+  const label = s.label ? escapeHtml(s.label) : 'Pristatymas';
+  const eur = price.toFixed(2).replace('.', ',') + ' €';
+  return `
+    <div style="margin:14px 0">
+      <div style="font-weight:600;margin-bottom:6px">Pristatymas</div>
+      <div>${label}: <b>${eur}</b></div>
+    </div>
+  `;
+})()}
 
       <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
 

@@ -1137,8 +1137,8 @@ async function boot() {
     offersCache  = await loadJson(OFFERS_FILE);
     ordersCache  = await loadJson(ORDERS_FILE);
 
-    app.listen(port, () => console.log('Serveris veikia ant port ' + port));
-  } catch (err) {
+    app.listen(PORT, () => console.log('Serveris veikia ant port ' + PORT));
+    } catch (err) {
     console.error('BOOT ERROR:', err);
     process.exit(1);
   }

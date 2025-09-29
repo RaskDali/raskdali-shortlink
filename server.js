@@ -36,8 +36,10 @@ const INVOICE_SEQ_FILE = path.join(DATA_DIR, 'invoice_seq.json');  // sąskaitų
 const app = express();
 const port = process.env.PORT || 10000;
 
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// ↑↑↑ PAKELTI LIMITAI, kad tilptų base64 nuotraukos
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -903,6 +905,26 @@ async function handleFreeRequest(req, res) {
 app.post('/api/uzklausa_free', uploadFree.any(), handleFreeRequest);
 app.post('/api/uzklausa-free', uploadFree.any(), handleFreeRequest);
 
+/* ---------- (NAUJA) Sanitarizacija vienai detalės eilutei ---------- */
+function sanitizeOfferItem(raw = {}) {
+  const one = {
+    pozNr: String(raw.pozNr || '').slice(0, 30),
+    name:  String(raw.name  || '').slice(0, 200),
+    desc:  String(raw.desc  || '').slice(0, 600),
+    eta:   String(raw.eta   || '').slice(0, 100),
+    type:  String(raw.type  || '').slice(0, 60),
+    'price-vat':   String(raw['price-vat']   || ''),
+    'price-novat': String(raw['price-novat'] || ''),
+    imgSrc: null
+  };
+  const src = String(raw.imgSrc || '');
+  // LEIDŽIAM http(s) ir data:image/*;base64,*
+  if (/^(https?:\/\/|data:image\/(png|jpe?g|webp|gif);base64,)/i.test(src)) {
+    one.imgSrc = src;
+  }
+  return one;
+}
+
 /* ---------- 5) Pasiūlymai (7 d. galiojimas) ---------- */
 app.post('/api/sukurti-pasiulyma', async (req, res) => {
   try {
@@ -910,11 +932,14 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
     const data = req.body;
     const id = nanoid(6);
 
+    // (Debug) – gali išjungti po testų
+    try { console.log('Gauta /api/sukurti-pasiulyma:', JSON.stringify({ shipping: data?.shipping, itemsCount: Array.isArray(data?.items) ? data.items.length : 0 }).slice(0, 1000)); } catch {}
+
     // Normalizuojam shipping (neprivalomas)
     let shipping = undefined;
     if (data.shipping && (typeof data.shipping === 'object')) {
       const label = String(data.shipping.label ?? '').trim();
-      const price = Number(data.shipping.price ?? 0);
+      const price = Number(String(data.shipping.price ?? '0').toString().replace(',', '.'));
       if (label || Number.isFinite(price)) {
         shipping = {
           label: label || 'Pristatymas',
@@ -923,8 +948,11 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
       }
     }
 
+    const itemsIn = Array.isArray(data.items) ? data.items : [];
+    const items = itemsIn.map(sanitizeOfferItem);
+
     offersCache[id] = {
-      items: Array.isArray(data.items) ? data.items : [],
+      items,
       shipping,                  // ← vienas, tavo parinktas pristatymas (arba nenurodytas)
       createdAt: Date.now()
     };

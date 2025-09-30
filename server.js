@@ -9,6 +9,25 @@ import multer from 'multer';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import PDFDocument from 'pdfkit';
+import os from 'os'; // jei dar nėra
+
+// --- Didelių JSON failų rotacija, kad nekristų dėl RAM ---
+const MAX_JSON_SIZE = 8 * 1024 * 1024; // 8 MB – jei failas didesnis, archyvuojam
+
+async function rotateIfTooLarge(filePath) {
+  try {
+    const st = await fs.stat(filePath);
+    if (st.size > MAX_JSON_SIZE) {
+      const bak = filePath + '.' + Date.now() + '.bak';
+      await fs.rename(filePath, bak);
+      console.warn('[DATA] ' + path.basename(filePath) + ' buvo ' + Math.round(st.size/1024/1024) + 'MB – perkeltas į: ' + bak);
+      // sukurti tuščią
+      await fs.writeFile(filePath, '{}');
+    }
+  } catch (e) {
+    // jei failo nėra ar pan. – praleidžiam
+  }
+}
 
 dotenv.config();
 
@@ -1099,6 +1118,37 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
       includeReturns: true
     });
 
+    // === LAIKINAS MIGRATORIUS – nukerpa per didelius data:image laukus iš offersCache ===
+app.get('/admin/migrate-offers-trim', async (req, res) => {
+  try {
+    let touched = 0, imagesTrimmed = 0;
+    const MAX_LEN = 300_000; // ~300 KB riba vienam data URL
+
+    for (const [id, offer] of Object.entries(offersCache || {})) {
+      if (!offer?.items) continue;
+      let changed = false;
+
+      for (const it of offer.items) {
+        if (typeof it?.imgSrc === 'string' && it.imgSrc.startsWith('data:image') && it.imgSrc.length > MAX_LEN) {
+          it.imgSrc = it.imgSrc.slice(0, MAX_LEN); // ARBA: it.imgSrc = null; jei nori visai nuimti
+          imagesTrimmed++;
+          changed = true;
+        }
+      }
+      if (changed) touched++;
+    }
+
+    if (touched) {
+      await saveJson(OFFERS_FILE, offersCache);
+    }
+
+    res.json({ ok: true, offersChanged: touched, imagesTrimmed });
+  } catch (e) {
+    console.error('MIGRATE TRIM ERROR', e);
+    res.status(500).json({ ok: false, error: 'Migration failed' });
+  }
+});
+
     await transporter.sendMail({
       from: `"RaskDali" <${SELLER.email}>`,
       to: o.buyer.email,
@@ -1125,19 +1175,50 @@ app.post('/api/orders/:orderid/resend', async (req, res) => {
 /* ---------- Start (be top-level await) ---------- */
 async function boot() {
   try {
-    // jeigu turi ensureDirs arba ensureDataDir – kviesk juos čia
     if (typeof ensureDirs === 'function') {
       await ensureDirs();
     } else if (typeof ensureDataDir === 'function') {
       await ensureDataDir();
     }
 
-    // užkraunam kešus čia, ne top-level
+    // 1) Prieš kraunant JSON – automatinė rotacija, jei failas per didelis
+    await rotateIfTooLarge(DRAFTS_FILE);
+    await rotateIfTooLarge(OFFERS_FILE);
+    await rotateIfTooLarge(ORDERS_FILE);
+
+    // 2) Dabar kraunam atmintin
     draftsCache = await loadJson(DRAFTS_FILE);
     offersCache  = await loadJson(OFFERS_FILE);
     ordersCache  = await loadJson(ORDERS_FILE);
 
     app.listen(PORT, () => console.log('Serveris veikia ant port ' + PORT));
+
+        // === Kas valandą – pašalinti pasenusius (senesnius nei 7 d.) pasiūlymus ===
+    setInterval(async () => {
+      try {
+        const MAX_AGE = 7 * 24 * 3600 * 1000;
+        const now = Date.now();
+        let removed = 0;
+
+        for (const [id, offer] of Object.entries(offersCache || {})) {
+          const tooOld = !offer?.createdAt || (now - offer.createdAt) > MAX_AGE;
+          if (tooOld) {
+            delete offersCache[id];
+            removed++;
+          }
+        }
+
+        if (removed) {
+          await saveJson(OFFERS_FILE, offersCache);
+          console.log('[GC] removed old offers:', removed);
+        }
+      } catch (e) {
+        console.error('[GC] cleanup error', e);
+      }
+    }, 60 * 60 * 1000);
+
+    
+    // (žr. 3 skyrių – čia įdėsime intervalą senų pasiūlymų valymui)
     } catch (err) {
     console.error('BOOT ERROR:', err);
     process.exit(1);

@@ -805,7 +805,12 @@ app.get('/klientoats/:id', (req, res) => {
       ${item.desc ? `<div class="desc"><i>${escapeHtml(item.desc)}</i></div>` : ''}
       ${item.eta ? `<div>Pristatymas: <b>${escapeHtml(item.eta)}</b></div>` : ''}
       <div>Kaina: <b>${escapeHtml(item['price-vat'] || '')}€</b> ${item['price-novat'] ? `(be PVM ${escapeHtml(item['price-novat'])}€)` : ''}</div>
-      ${item.imgSrc ? `<div class="img"><img src="${escapeHtml(item.imgSrc)}" loading="lazy" referrerpolicy="no-referrer" alt=""></div>` : ''}
+      ${item.imgSrc ? `
+  <div class="img">
+    <a href="${escapeHtml(item.imgSrc)}" target="_blank" rel="noopener">
+      <img src="${escapeHtml(item.imgSrc)}" loading="lazy" referrerpolicy="no-referrer" alt="">
+    </a>
+  </div>` : ''}
       <label><input type="checkbox" name="choose" value="${i}"> Užsakyti šią detalę</label>
     </div>
   `).join('');
@@ -824,8 +829,15 @@ app.get('/klientoats/:id', (req, res) => {
   .item:first-child{border-top:none}
   .type{color:#406BBA}
   .desc{color:#374151}
-  .img img{max-width:140px;max-height:140px;border:1px solid var(--line);border-radius:10px;margin-top:6px}
-  input,button{font-size:14px}
+  .img{display:inline-block; padding:6px; border:1px solid var(--line); border-radius:10px; background:#fff; margin-top:6px}
+.img img{
+  max-width:220px;           /* galima keisti 160–280 pagal skonį */
+  max-height:220px;
+  width:auto; height:auto;   /* neleisti tempti */
+  object-fit:contain;        /* nekarpyti — talpinti visą kadrą */
+  display:block;
+}
+ input,button{font-size:14px}
   .btn{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:10px 16px;cursor:pointer}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   @media (max-width:640px){ .grid{grid-template-columns:1fr} }

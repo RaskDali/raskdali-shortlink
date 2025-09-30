@@ -296,35 +296,6 @@ function payButton(url, label = 'Apmokėti per Paysera') {
   </table>`;
 }
 
-// ——— didesnis, centruotas logotipas HTML laiškuose
-function topLogoCentered(height = 44) {
-  return `
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
-    <tr>
-      <td align="center" style="padding:14px 0">
-        <img src="https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png"
-             alt="RaskDali" style="height:${height}px; display:block;">
-      </td>
-    </tr>
-  </table>`;
-}
-
-// ——— tvarkinga užsakymo lentelė (el. paštui)
-function renderOrderTable(items = [], total = 0) {
-  const rows = items.map(it => {
-    const name = escapeHtml(it?.name || '');
-    const desc = it?.desc ? `<div style="color:#6b7280;font-size:12px;line-height:1.35">${escapeHtml(it.desc)}</div>` : '';
-    const price = (Number(it?.price) || 0).toFixed(2).replace('.', ',') + ' €';
-    return `
-      <tr>
-        <td style="padding:10px 12px;border-bottom:1px solid #eee">
-          <div style="font-weight:600;color:#111">${name}</div>
-          ${desc}
-        </td>
-        <td align="right" style="white-space:nowrap;padding:10px 12px;border-bottom:1px solid #eee;color:#111">${price}</td>
-      </tr>`;
-  }).join('');
-
   return `
   <table role="presentation" cellpadding="0" cellspacing="0"
          style="width:100%;max-width:520px;margin:8px auto;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif">
@@ -1121,21 +1092,23 @@ async function finalizePaidOrder(orderid, reason = 'callback') {
   ).join('');
 
   // ADMIN
-  await transporter.sendMail({
-    from: `"RaskDali" <${SELLER.email}>`,
-    to: SELLER.email,
-    subject: `Užsakymas apmokėtas – ${o.buyer?.name || 'klientas'} (order ${orderid})`,
-    html: `
-  ${topLogoCentered(44)}
-  <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
-    Užsakymas apmokėtas
-  </div>
-  <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
-    <b>OrderID:</b> ${escapeHtml(orderid)}
-  </div>
-  ${renderOrderTable(o.items, (o.total || 0))} 
-    attachments: [{ filename: `${o.invoiceNo}.pdf`, content: pdf, contentType: 'application/pdf' }],
-  }).catch(e => console.error('MAIL admin order-paid err:', e));
+await transporter.sendMail({
+  from: `"RaskDali" <${SELLER.email}>`,
+  to: SELLER.email,
+  subject: `Užsakymas apmokėtas – ${o.buyer?.name || 'klientas'} (order ${orderid})`,
+  html: `
+    ${topLogoCentered(44)}
+    <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
+      Užsakymas apmokėtas
+    </div>
+    <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
+      <b>OrderID:</b> ${escapeHtml(orderid)}
+    </div>
+    ${renderOrderTable(o.items, (o.total || 0))}
+  `,
+  attachments: [{ filename: `${o.invoiceNo}.pdf`, content: pdf, contentType: 'application/pdf' }]
+}).catch(e => console.error('MAIL admin order-paid err:', e));
+
 
   // KLIENTUI
   if (o.buyer?.email) {
@@ -1230,17 +1203,23 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
       `<li><b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}</li>`
     ).join('');
 
-    // ADMIN
- html: `
-  ${topLogoCentered(44)}
-  <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
-    Gautas užsakymas
-  </div>
-  <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
-    <b>OrderID:</b> ${escapeHtml(orderid)}
-  </div>
-  ${renderOrderTable(items, total)}
-  ${payButton(payUrl, 'Apmokėti per Paysera')} .catch(e => console.error('offer→admin mail err:', e));
+  // ADMIN
+await transporter.sendMail({
+  from: `"RaskDali" <${SELLER.email}>`,
+  to: SELLER.email,
+  subject: `Naujas užsakymas – ${buyer.name || 'klientas'} (order ${orderid})`,
+  html: `
+    ${topLogoCentered(44)}
+    <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
+      Gautas užsakymas
+    </div>
+    <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
+      <b>OrderID:</b> ${escapeHtml(orderid)}
+    </div>
+    ${renderOrderTable(items, total)}
+    ${payButton(payUrl, 'Apmokėti per Paysera')}
+  `
+}).catch(e => console.error('offer→admin mail err:', e));
 
     // KLIENTUI
     if (email) {

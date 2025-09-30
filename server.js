@@ -744,7 +744,7 @@ function sanitizeOfferItem(raw = {}) {
   // Leidžiam http(s) arba data:image, bet apkarpom labai didelius base64 (iki ~1.2 MB)
   if (/^(https?:\/\/|data:image\/(png|jpe?g|webp|gif);base64,)/i.test(src)) {
     if (src.startsWith('data:image')) {
-      const MAX_LEN = 1_200_000; // ~1.2 MB — saugiklis nuo OOM
+      const MAX_LEN = 5_000_000; // ~1.2 MB — saugiklis nuo OOM
       one.imgSrc = src.length > MAX_LEN ? src.slice(0, MAX_LEN) : src;
     } else {
       one.imgSrc = src;

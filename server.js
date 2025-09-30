@@ -232,23 +232,91 @@ const EMAIL_FOOTER_HTML = `
 `;
 
 function buildPayNowEmail({ title, items, total, buyer, payUrl }) {
-  const list = (items || []).map(it => `
-    <li>
-      <b>${escapeHtml(it.name)}</b> — ${Number(it.price).toFixed(2)} €
-      ${it.desc ? `<br><i>${escapeHtml(it.desc)}</i>` : ''}
-    </li>
-  `).join('');
+  const rows = (items || []).map(it => {
+    const name = escapeHtml(it.name || '');
+    const desc = it.desc ? `<div style="color:#6b7280;font-size:12px;line-height:1.4">${escapeHtml(it.desc)}</div>` : '';
+    const price = Number(it.price || 0).toFixed(2).replace('.', ',') + ' €';
+    return `
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #eee;">
+          <div style="font-weight:600;color:#111">${name}</div>
+          ${desc}
+        </td>
+        <td align="right" style="padding:10px 12px;border-bottom:1px solid #eee;white-space:nowrap;color:#111">
+          ${price}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const totalHtml = `
+    <tr>
+      <td align="right" style="padding:12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">Viso su PVM:</td>
+      <td align="right" style="padding:12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">
+        ${Number(total || 0).toFixed(2).replace('.', ',')} €
+      </td>
+    </tr>
+  `;
+
+  const buyerLine = `
+    <p style="margin:0 0 10px 0;color:#111">
+      <b>Pirkėjas:</b> ${escapeHtml(buyer?.name || '')}
+      ${buyer?.email ? ` · <a href="mailto:${escapeHtml(buyer.email)}" style="color:#436BAA;text-decoration:none">${escapeHtml(buyer.email)}</a>` : ''}
+    </p>
+  `;
+
+  const payBtn = payUrl ? `
+    <div style="text-align:center;margin:18px 0 6px 0">
+      <a href="${escapeHtml(payUrl)}" target="_blank" rel="noopener"
+         style="display:inline-block;background:#436BAA;color:#fff;text-decoration:none;
+                padding:12px 18px;border-radius:10px;font-weight:700">
+        Apmokėti per Paysera
+      </a>
+    </div>
+  ` : '';
+
   return `
     ${topLogoHtml}
-    <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#111">
-      <h2 style="margin:6px 0 10px 0">${escapeHtml(title || 'Užsakymo santrauka')}</h2>
-      <p><b>Pirkėjas:</b> ${escapeHtml(buyer?.name || '')}${buyer?.email ? ` · <a href="mailto:${escapeHtml(buyer.email)}">${escapeHtml(buyer.email)}</a>` : ''}</p>
-      <ul>${list}</ul>
-      <p style="font-size:15px"><b>Viso su PVM:</b> ${Number(total || 0).toFixed(2)} €</p>
-      <p><a href="${escapeHtml(payUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;border-radius:10px;background:#436BAA;color:#fff;text-decoration:none;font-weight:600">Apmokėti per Paysera</a></p>
-      <p style="color:#6b7280;font-size:13px;margin-top:6px">Jei jau apmokėjote, šios nuorodos spausti nereikia.</p>
-    </div>
-    ${EMAIL_FOOTER_HTML}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="620" cellpadding="0" cellspacing="0"
+                 style="width:100%;max-width:620px;background:#ffffff;border:1px solid #e5e7eb;
+                        border-radius:12px;box-shadow:0 2px 10px #0000000f">
+            <tr>
+              <td style="padding:18px 20px 6px 20px">
+                <h2 style="margin:0 0 6px 0;font-size:20px;color:#111">${escapeHtml(title || 'Užsakymo santrauka')}</h2>
+                ${buyerLine}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 20px 10px 20px">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                       style="border-collapse:collapse">
+                  <thead>
+                    <tr>
+                      <th align="left"  style="padding:10px 12px;background:#f8fafc;border:1px solid #eef2f7;border-bottom:none;color:#111;font-size:13px">Prekė</th>
+                      <th align="right" style="padding:10px 12px;background:#f8fafc;border:1px solid #eef2f7;border-bottom:none;color:#111;font-size:13px;white-space:nowrap">Kaina</th>
+                    </tr>
+                  </thead>
+                  <tbody style="border:1px solid #eef2f7;border-top:none">
+                    ${rows || `
+                      <tr><td colspan="2" style="padding:12px;color:#6b7280">Prekių sąrašas tuščias.</td></tr>
+                    `}
+                    ${totalHtml}
+                  </tbody>
+                </table>
+                ${payBtn}
+                <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;text-align:center">
+                  Jei jau apmokėjote, šios nuorodos spausti nereikia.
+                </p>
+              </td>
+            </tr>
+          </table>
+          <div style="max-width:620px;margin:10px auto 0 auto">${EMAIL_FOOTER_HTML}</div>
+        </td>
+      </tr>
+    </table>
   `;
 }
 

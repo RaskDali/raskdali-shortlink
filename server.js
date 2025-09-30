@@ -231,94 +231,143 @@ const EMAIL_FOOTER_HTML = `
   </div>
 `;
 
-function buildPayNowEmail({ title, items, total, buyer, payUrl }) {
-  const rows = (items || []).map(it => {
-    const name = escapeHtml(it.name || '');
-    const desc = it.desc ? `<div style="color:#6b7280;font-size:12px;line-height:1.4">${escapeHtml(it.desc)}</div>` : '';
-    const price = Number(it.price || 0).toFixed(2).replace('.', ',') + ' €';
+// === UI helperiai el. laiškams =============================================
+
+// Logotipas centre (aukštį gali keisti argumentu)
+function topLogoCentered(height = 40) {
+  return `
+  <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
+    <tr><td align="center" style="padding:16px 0">
+      <img src="https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png"
+           alt="RaskDali" style="height:${height}px;display:block">
+    </td></tr>
+  </table>`;
+}
+
+// Vienoda, e-laiškams draugiška užsakymo lentelė
+function renderOrderTable(items = [], total = 0) {
+  const rows = (items || []).map(it => `
+    <tr>
+      <td style="padding:10px 12px;border-bottom:1px solid #eee">
+        <div style="font-weight:600;color:#111">${escapeHtml(it.name || '')}</div>
+        ${it.desc ? `<div style="color:#6b7280;font-size:12px;margin-top:2px">${escapeHtml(it.desc)}</div>` : ``}
+      </td>
+      <td align="right" style="padding:10px 12px;border-bottom:1px solid #eee;white-space:nowrap;color:#111">
+        ${Number(it.price || 0).toFixed(2)} €
+      </td>
+    </tr>`).join('');
+
+  return `
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr><td align="center">
+      <table cellpadding="0" cellspacing="0" width="640"
+             style="max-width:640px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;
+                    font-family:Arial,sans-serif;background:#fff">
+        <tr>
+          <td style="padding:12px 16px;border-bottom:1px solid #eee;font-weight:700;color:#111">
+            Jūsų užsakymo santrauka
+          </td>
+          <td style="padding:12px 16px;border-bottom:1px solid #eee;color:#6b7280" align="right">
+            Kaina
+          </td>
+        </tr>
+        ${rows || `<tr><td colspan="2" style="padding:14px 16px;color:#6b7280">Tuščia</td></tr>`}
+        <tr>
+          <td style="padding:12px 16px;font-weight:700;color:#111">Viso su PVM:</td>
+          <td align="right" style="padding:12px 16px;font-weight:700;color:#111">
+            ${Number(total || 0).toFixed(2)} €
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>`;
+}
+
+// Mygtukas e-laiškui
+function payButton(url, label = 'Apmokėti per Paysera') {
+  return `
+  <table cellpadding="0" cellspacing="0" role="presentation" style="margin:14px auto">
+    <tr><td align="center">
+      <a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+         style="display:inline-block;background:#436BAA;color:#fff;
+                text-decoration:none;font-weight:600;border-radius:10px;
+                padding:10px 16px">${label}</a>
+    </td></tr>
+  </table>`;
+}
+
+// ——— didesnis, centruotas logotipas HTML laiškuose
+function topLogoCentered(height = 44) {
+  return `
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr>
+      <td align="center" style="padding:14px 0">
+        <img src="https://assets.zyrosite.com/A0xl6GKo12tBorNO/rask-dali-siauras-YBg7QDW7g6hKw3WD.png"
+             alt="RaskDali" style="height:${height}px; display:block;">
+      </td>
+    </tr>
+  </table>`;
+}
+
+// ——— tvarkinga užsakymo lentelė (el. paštui)
+function renderOrderTable(items = [], total = 0) {
+  const rows = items.map(it => {
+    const name = escapeHtml(it?.name || '');
+    const desc = it?.desc ? `<div style="color:#6b7280;font-size:12px;line-height:1.35">${escapeHtml(it.desc)}</div>` : '';
+    const price = (Number(it?.price) || 0).toFixed(2).replace('.', ',') + ' €';
     return `
       <tr>
-        <td style="padding:10px 12px;border-bottom:1px solid #eee;">
+        <td style="padding:10px 12px;border-bottom:1px solid #eee">
           <div style="font-weight:600;color:#111">${name}</div>
           ${desc}
         </td>
-        <td align="right" style="padding:10px 12px;border-bottom:1px solid #eee;white-space:nowrap;color:#111">
-          ${price}
-        </td>
-      </tr>
-    `;
+        <td align="right" style="white-space:nowrap;padding:10px 12px;border-bottom:1px solid #eee;color:#111">${price}</td>
+      </tr>`;
   }).join('');
 
-  const totalHtml = `
-    <tr>
-      <td align="right" style="padding:12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">Viso su PVM:</td>
-      <td align="right" style="padding:12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">
-        ${Number(total || 0).toFixed(2).replace('.', ',')} €
-      </td>
-    </tr>
-  `;
-
-  const buyerLine = `
-    <p style="margin:0 0 10px 0;color:#111">
-      <b>Pirkėjas:</b> ${escapeHtml(buyer?.name || '')}
-      ${buyer?.email ? ` · <a href="mailto:${escapeHtml(buyer.email)}" style="color:#436BAA;text-decoration:none">${escapeHtml(buyer.email)}</a>` : ''}
-    </p>
-  `;
-
-  const payBtn = payUrl ? `
-    <div style="text-align:center;margin:18px 0 6px 0">
-      <a href="${escapeHtml(payUrl)}" target="_blank" rel="noopener"
-         style="display:inline-block;background:#436BAA;color:#fff;text-decoration:none;
-                padding:12px 18px;border-radius:10px;font-weight:700">
-        Apmokėti per Paysera
-      </a>
-    </div>
-  ` : '';
-
   return `
-    ${topLogoHtml}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif">
+  <table role="presentation" cellpadding="0" cellspacing="0"
+         style="width:100%;max-width:520px;margin:8px auto;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif">
+    <thead>
+      <tr style="background:#f3f4f6">
+        <th align="left"  style="padding:10px 12px;font-size:13px;color:#374151">Prekė</th>
+        <th align="right" style="padding:10px 12px;font-size:13px;color:#374151">Kaina</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
       <tr>
-        <td align="center">
-          <table role="presentation" width="620" cellpadding="0" cellspacing="0"
-                 style="width:100%;max-width:620px;background:#ffffff;border:1px solid #e5e7eb;
-                        border-radius:12px;box-shadow:0 2px 10px #0000000f">
-            <tr>
-              <td style="padding:18px 20px 6px 20px">
-                <h2 style="margin:0 0 6px 0;font-size:20px;color:#111">${escapeHtml(title || 'Užsakymo santrauka')}</h2>
-                ${buyerLine}
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:0 20px 10px 20px">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                       style="border-collapse:collapse">
-                  <thead>
-                    <tr>
-                      <th align="left"  style="padding:10px 12px;background:#f8fafc;border:1px solid #eef2f7;border-bottom:none;color:#111;font-size:13px">Prekė</th>
-                      <th align="right" style="padding:10px 12px;background:#f8fafc;border:1px solid #eef2f7;border-bottom:none;color:#111;font-size:13px;white-space:nowrap">Kaina</th>
-                    </tr>
-                  </thead>
-                  <tbody style="border:1px solid #eef2f7;border-top:none">
-                    ${rows || `
-                      <tr><td colspan="2" style="padding:12px;color:#6b7280">Prekių sąrašas tuščias.</td></tr>
-                    `}
-                    ${totalHtml}
-                  </tbody>
-                </table>
-                ${payBtn}
-                <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;text-align:center">
-                  Jei jau apmokėjote, šios nuorodos spausti nereikia.
-                </p>
-              </td>
-            </tr>
-          </table>
-          <div style="max-width:620px;margin:10px auto 0 auto">${EMAIL_FOOTER_HTML}</div>
+        <td align="right" style="padding:12px 12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">Viso su PVM:</td>
+        <td align="right" style="padding:12px 12px;border-top:2px solid #e5e7eb;font-weight:700;color:#111">
+          ${(Number(total)||0).toFixed(2).replace('.', ',')} €
         </td>
       </tr>
-    </table>
+    </tfoot>
+  </table>`;
+}
+
+function buildPayNowEmail({ title, items, total, buyer, payUrl }) {
+  const buyerLine = `
+    <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;margin:6px auto 2px;max-width:520px">
+      Pirkėjas: <b style="color:#111">${escapeHtml(buyer?.name || '')}</b>
+      ${buyer?.email ? ` · <a href="mailto:${escapeHtml(buyer.email)}" style="color:#436BAA;text-decoration:none">${escapeHtml(buyer.email)}</a>` : ``}
+    </div>`;
+
+  return `
+    ${topLogoCentered(48)}
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#111;margin:2px auto 6px;max-width:520px;font-weight:700">
+      ${escapeHtml(title || 'Užsakymo santrauka')}
+    </div>
+    ${buyerLine}
+    ${renderOrderTable(items, total)}
+    ${payButton(payUrl)}
+    <div style="font-family:Arial,sans-serif;font-size:12px;color:#6b7280;text-align:center;margin-top:6px">
+      Jei jau apmokėjote, šios nuorodos spausti nereikia.
+    </div>
+    ${EMAIL_FOOTER_HTML}
   `;
 }
+
 
 /* ---------- PDF ---------- */
 function formatMoney(n) { return Number(n || 0).toFixed(2) + ' €'; }
@@ -1076,7 +1125,15 @@ async function finalizePaidOrder(orderid, reason = 'callback') {
     from: `"RaskDali" <${SELLER.email}>`,
     to: SELLER.email,
     subject: `Užsakymas apmokėtas – ${o.buyer?.name || 'klientas'} (order ${orderid})`,
-    html: `${topLogoHtml}<h3>Užsakymas apmokėtas</h3><p><b>OrderID:</b> ${orderid}</p><ul>${listHtml}</ul>`,
+    html: `
+  ${topLogoCentered(44)}
+  <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
+    Užsakymas apmokėtas
+  </div>
+  <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
+    <b>OrderID:</b> ${escapeHtml(orderid)}
+  </div>
+  ${renderOrderTable(o.items, (o.total || 0))} 
     attachments: [{ filename: `${o.invoiceNo}.pdf`, content: pdf, contentType: 'application/pdf' }],
   }).catch(e => console.error('MAIL admin order-paid err:', e));
 
@@ -1174,12 +1231,16 @@ app.post('/klientoats/:id/order', express.urlencoded({ extended: true }), async 
     ).join('');
 
     // ADMIN
-    transporter.sendMail({
-      from: `"RaskDali" <${SELLER.email}>`,
-      to: SELLER.email,
-      subject: `Naujas užsakymas – ${buyer.name || 'klientas'} (order ${orderid})`,
-      html: `${topLogoHtml}<h3>Gautas užsakymas</h3><p><b>OrderID:</b> ${orderid}</p><ul>${detalesHtml}</ul><p><b>Viso su PVM:</b> ${total.toFixed(2)} €</p><p><a href="${payUrl}" target="_blank" rel="noopener">Apmokėti per Paysera</a></p>`
-    }).catch(e => console.error('offer→admin mail err:', e));
+ html: `
+  ${topLogoCentered(44)}
+  <div style="font-family:Arial,sans-serif;font-size:16px;font-weight:700;color:#111;max-width:520px;margin:6px auto 8px">
+    Gautas užsakymas
+  </div>
+  <div style="font-family:Arial,sans-serif;font-size:13px;color:#6b7280;max-width:520px;margin:0 auto 8px">
+    <b>OrderID:</b> ${escapeHtml(orderid)}
+  </div>
+  ${renderOrderTable(items, total)}
+  ${payButton(payUrl, 'Apmokėti per Paysera')} .catch(e => console.error('offer→admin mail err:', e));
 
     // KLIENTUI
     if (email) {

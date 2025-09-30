@@ -798,6 +798,7 @@ app.get('/klientoats/:id', (req, res) => {
   }
 
   const home = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
+
   const rowsHtml = (offer.items || []).map((item, i) => `
     <div class="item">
       <b>${item.pozNr ? `${item.pozNr}. ` : ''}${escapeHtml(item.name || '')}</b>
@@ -806,11 +807,11 @@ app.get('/klientoats/:id', (req, res) => {
       ${item.eta ? `<div>Pristatymas: <b>${escapeHtml(item.eta)}</b></div>` : ''}
       <div>Kaina: <b>${escapeHtml(item['price-vat'] || '')}€</b> ${item['price-novat'] ? `(be PVM ${escapeHtml(item['price-novat'])}€)` : ''}</div>
       ${item.imgSrc ? `
-  <div class="img">
-    <a href="${escapeHtml(item.imgSrc)}" target="_blank" rel="noopener">
-      <img src="${escapeHtml(item.imgSrc)}" loading="lazy" referrerpolicy="no-referrer" alt="">
-    </a>
-  </div>` : ''}
+        <div class="img">
+          <a href="#" class="zoom" data-src="${escapeHtml(item.imgSrc)}">
+            <img src="${escapeHtml(item.imgSrc)}" loading="lazy" alt="">
+          </a>
+        </div>` : ''}
       <label><input type="checkbox" name="choose" value="${i}"> Užsakyti šią detalę</label>
     </div>
   `).join('');
@@ -829,19 +830,50 @@ app.get('/klientoats/:id', (req, res) => {
   .item:first-child{border-top:none}
   .type{color:#406BBA}
   .desc{color:#374151}
-  .img{display:inline-block; padding:6px; border:1px solid var(--line); border-radius:10px; background:#fff; margin-top:6px}
-.img img{
-  max-width:220px;           /* galima keisti 160–280 pagal skonį */
-  max-height:220px;
-  width:auto; height:auto;   /* neleisti tempti */
-  object-fit:contain;        /* nekarpyti — talpinti visą kadrą */
-  display:block;
-}
- input,button{font-size:14px}
+
+  /* vaizdo dėžutė */
+  .img{
+    display:inline-flex;
+    align-items:center;
+    justify-content:flex-start;
+    padding:6px;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:#fff;
+    margin-top:6px;
+    max-width:280px; /* gali didinti/mažinti */
+  }
+  /* pats vaizdas – nekarpyti */
+  .img img{
+    width:auto; height:auto;
+    max-width:100%;
+    max-height:200px; /* reguliuok peržiūros aukštį */
+    object-fit:contain;
+    display:block;
+  }
+
+  input,button{font-size:14px}
   .btn{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:10px 16px;cursor:pointer}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   @media (max-width:640px){ .grid{grid-template-columns:1fr} }
   .warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:10px 12px;border-radius:10px;margin:10px 0}
+
+  /* lightbox (dialog) */
+  dialog#zoom { border:none; padding:0; background:transparent; }
+  dialog#zoom::backdrop{ background: rgba(0,0,0,.6); }
+  .zoom-wrap{
+    max-width:min(92vw, 1100px);
+    max-height:90vh;
+    margin:4vh auto;
+    background:#fff;
+    border-radius:12px;
+    overflow:hidden;
+    box-shadow:0 20px 80px #0006;
+  }
+  .zoom-head{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #eee}
+  .zoom-body{padding:10px;display:flex;justify-content:center}
+  .zoom-body img{max-width:100%;max-height:80vh;object-fit:contain;display:block}
+  .zoom-close{background:#436BAA;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer}
 </style></head>
 <body>
   <div class="wrap">
@@ -849,6 +881,7 @@ app.get('/klientoats/:id', (req, res) => {
       <h1 style="margin:0">Detalių pasiūlymas</h1>
       <div class="small">Nuoroda galioja 7 d.</div>
     </div>
+
     <form method="POST" action="/klientoats/${req.params.id}/order">
       <div class="grid">
         <label>Vardas/įmonė<br><input name="vardas" required style="width:100%"></label>
@@ -867,34 +900,50 @@ app.get('/klientoats/:id', (req, res) => {
       <div class="warn">Dėmesio: <b>neapmokėti užsakymai nevykdomi.</b> Galite <b>apmokėti iškart žemiau</b> arba laukti <b>el. laiško</b> su nuoroda ir PDF sąskaita.</div>
 
       ${(() => {
-  const s = offer.shipping;
-  if (!s) return '';
-  const price = Number(s.price || 0);
-  const label = s.label ? escapeHtml(s.label) : 'Pristatymas';
-  const eur = price.toFixed(2).replace('.', ',') + ' €';
-  return `
-    <div style="margin:14px 0">
-      <div style="font-weight:600;margin-bottom:6px">Pristatymas</div>
-      <div>${label}: <b>${eur}</b></div>
-    </div>
-  `;
-})()}
+        const s = offer.shipping;
+        if (!s) return '';
+        const price = Number(s.price || 0);
+        const label = s.label ? escapeHtml(s.label) : 'Pristatymas';
+        const eur = price.toFixed(2).replace('.', ',') + ' €';
+        return `
+          <div style="margin:14px 0">
+            <div style="font-weight:600;margin-bottom:6px">Pristatymas</div>
+            <div>${label}: <b>${eur}</b></div>
+          </div>
+        `;
+      })()}
 
       <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-
       ${rowsHtml || '<div class="small">Pasiūlymas tuščias.</div>'}
+
       <button type="submit" class="btn" style="margin-top:12px">Užsakyti pasirinktas</button>
       <div id="chooseErr" class="warn" style="display:none;margin-top:10px">
         Nepasirinkta nei viena prekė – pažymėkite bent vieną.
       </div>
-      <a href="${escapeHtml(home)}" style="margin-left:10px">Į pradžią</a>
+      <a href="${home}" style="margin-left:10px">Į pradžią</a>
     </form>
   </div>
+
+  <!-- lightbox dialog -->
+  <dialog id="zoom">
+    <div class="zoom-wrap">
+      <div class="zoom-head">
+        <div style="font-weight:600">Peržiūra</div>
+        <button class="zoom-close" type="button">Uždaryti</button>
+      </div>
+      <div class="zoom-body">
+        <img id="zoom-img" src="" alt="">
+      </div>
+    </div>
+  </dialog>
+
 <script>
+  // validacija: bent viena detalė turi būti pažymėta
   (function () {
     const form = document.querySelector('form[action^="/klientoats/"][method="POST"]');
     const errBox = document.getElementById('chooseErr');
     if (!form || !errBox) return;
+
     form.addEventListener('submit', function (e) {
       const hasAny = !!form.querySelector('input[name="choose"]:checked');
       if (!hasAny) {
@@ -904,6 +953,29 @@ app.get('/klientoats/:id', (req, res) => {
         errBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }, false);
+  })();
+
+  // paprastas “zoom” vietoje
+  (function(){
+    const dlg  = document.getElementById('zoom');
+    const zimg = document.getElementById('zoom-img');
+    const zbtn = dlg?.querySelector('.zoom-close');
+
+    document.addEventListener('click', function(e){
+      const a = e.target.closest('a.zoom');
+      if (!a) return;
+      e.preventDefault();
+      const src = a.getAttribute('data-src');
+      if (!src) return;
+      zimg.src = src;
+      try { dlg.showModal(); } catch { dlg.show(); }
+    });
+
+    zbtn?.addEventListener('click', () => dlg.close());
+    dlg?.addEventListener('click', (e) => {
+      const box = e.target.closest('.zoom-wrap');
+      if (!box) dlg.close();
+    });
   })();
 </script>
 </body></html>`);

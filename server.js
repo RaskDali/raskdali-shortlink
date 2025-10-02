@@ -848,6 +848,11 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
   }
 });
 
+// Paysera domeno patvirtinimui
+app.get('/paysera_d8ca0c14353ea467cab92b07d0a373cd.html', (req, res) => {
+  res.send('d8ca0c14353ea467cab92b07d0a373cd');
+});
+
 /* ---------- 5b) Kliento puslapis ---------- */
 app.get('/klientoats/:id', (req, res) => {
   const offer = offersCache[req.params.id];

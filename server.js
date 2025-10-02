@@ -854,6 +854,13 @@ app.get('/paysera_d8ca0c14353ea467cab92b07d0a373cd.html', (req, res) => {
   res.type('text/plain').send('d8ca0c14353ea467cab92b07d0a373cd');
 });
 
+// Root landing: redirect to main site so Paysera sees a working page
+app.get('/', (req, res) => {
+  const site = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/,'');
+  res.redirect(301, site);
+});
+
+
 /* ---------- 5b) Kliento puslapis ---------- */
 app.get('/klientoats/:id', (req, res) => {
   const offer = offersCache[req.params.id];

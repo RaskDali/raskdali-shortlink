@@ -848,11 +848,6 @@ app.post('/api/sukurti-pasiulyma', async (req, res) => {
   }
 });
 
-// Paysera domeno patvirtinimui
-app.get('/paysera_d8ca0c14353ea467cab92b07d0a373cd.html', (req, res) => {
-  res.send('d8ca0c14353ea467cab92b07d0a373cd');
-});
-
 /* ---------- 5b) Kliento puslapis ---------- */
 app.get('/klientoats/:id', (req, res) => {
   const offer = offersCache[req.params.id];
@@ -867,6 +862,11 @@ app.get('/klientoats/:id', (req, res) => {
         <p>Jei vis dar norite įsigyti detales, parašykite mums – atnaujinsime pasiūlymą.</p>
       </div>`);
   }
+
+  // Paysera nuosavybės patvirtinimas – FAILO imitacija
+app.get('/paysera_d8ca0c14353ea467cab92b07d0a373cd.html', (req, res) => {
+  res.type('text/plain').send('d8ca0c14353ea467cab92b07d0a373cd');
+});
 
   const home = (process.env.SITE_BASE_URL || 'https://www.raskdali.lt').replace(/\/+$/, '');
 

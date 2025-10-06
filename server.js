@@ -1243,6 +1243,33 @@ await transporter.sendMail({
   }
 });
 
+// ---- DEBUG: pažiūrėti kur ir koks skaitiklis ----
+app.get('/admin/peek-invoice', async (req, res) => {
+  try {
+    const seq = await loadJson(INVOICE_SEQ_FILE);
+    res.json({
+      hostname: os.hostname(),          // kuris instancas atsako
+      file: INVOICE_SEQ_FILE,           // tikslus kelias
+      seq                                // { year, counter }
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ---- DEBUG: nunulinti skaitiklį (daryk tik žinodamas, ką darai) ----
+app.post('/admin/invoice-reset', async (req, res) => {
+  try {
+    const yr = new Date().getFullYear();
+    await saveJson(INVOICE_SEQ_FILE, { year: yr, counter: 0 });
+    res.json({ ok: true, file: INVOICE_SEQ_FILE, seq: { year: yr, counter: 0 } });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+
+
 /* ---------- 7) PDF peržiūra ---------- */
 app.get('/api/invoice/:orderid', async (req, res) => {
   try {

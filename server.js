@@ -203,7 +203,7 @@ async function nextInvoiceNo() {
 
 /* ---------- Rekvizitai ---------- */
 const SELLER = {
-  name: 'RaskDali / UAB „Magdaris“',
+  name: 'RaskDali.lt / UAB „Magdaris“',
   addr: 'Vilniaus g. 3B, Karmėlava, 54448, Lietuva',
   code: '159941827',
   vat: 'LT599418219',

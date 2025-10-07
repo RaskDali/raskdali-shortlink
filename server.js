@@ -976,7 +976,7 @@ app.get('/klientoats/:id', (req, res) => {
         <label>Sąskaitos adresas<br><input name="saskaitos_adresas" style="width:100%"></label>
       </div>
 
-      <div class="warn">Dėmesio: <b>neapmokėti užsakymai nevykdomi.</b> Galite <b>apmokėti iškart žemiau</b> arba laukti <b>el. laiško</b> su nuoroda ir PDF sąskaita.</div>
+      <div class="warn">Dėmesio: <b>neapmokėti užsakymai nevykdomi.</b> Galite <b>apmokėti iškart žemiau</b> arba laukti <b>el. laiško</b> su nuoroda apmokėjimui.</div>
 
       ${(() => {
         const s = offer.shipping;

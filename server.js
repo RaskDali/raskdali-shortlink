@@ -963,7 +963,7 @@ app.get('/klientoats/:id', (req, res) => {
 
     <form method="POST" action="/klientoats/${req.params.id}/order">
       <div class="grid">
-        <label>Vardas, pavardė arba įmonė<br><input name="vardas" required style="width:100%"></label>
+        <label>Vardas, Pavardė<br><input name="vardas" required style="width:100%"></label>
         <label>El. paštas<br><input type="email" name="email" required style="width:100%"></label>
         <label>Pristatymo adresas<br><input name="adresas" required style="width:100%"></label>
       </div>

@@ -968,7 +968,7 @@ app.get('/klientoats/:id', (req, res) => {
         <label>Pristatymo adresas<br><input name="adresas" required style="width:100%"></label>
       </div>
 
-      <div class="small" style="margin-top:10px">Rekvizitai sąskaitai (nebūtina)</div>
+      <div class="small" style="margin-top:10px">Rekvizitai sąskaitai (jei perkate kaip įmonė)</div>
       <div class="grid" style="margin-top:6px">
         <label>Įmonės pavadinimas<br><input name="imone" style="width:100%"></label>
         <label>Įmonės kodas<br><input name="imones_kodas" style="width:100%"></label>

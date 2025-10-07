@@ -203,7 +203,7 @@ async function nextInvoiceNo() {
 
 /* ---------- Rekvizitai ---------- */
 const SELLER = {
-  name: 'RaskDali.lt / UAB „Magdaris“',
+  name: 'UAB „Magdaris“',
   addr: 'Vilniaus g. 3B, Karmėlava, 54448, Lietuva',
   code: '159941827',
   vat: 'LT599418219',
@@ -963,7 +963,7 @@ app.get('/klientoats/:id', (req, res) => {
 
     <form method="POST" action="/klientoats/${req.params.id}/order">
       <div class="grid">
-        <label>Vardas/įmonė<br><input name="vardas" required style="width:100%"></label>
+        <label>Vardas, pavardė arba įmonė<br><input name="vardas" required style="width:100%"></label>
         <label>El. paštas<br><input type="email" name="email" required style="width:100%"></label>
         <label>Pristatymo adresas<br><input name="adresas" required style="width:100%"></label>
       </div>

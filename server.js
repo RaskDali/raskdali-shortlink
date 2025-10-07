@@ -446,7 +446,7 @@ async function makeInvoicePdfBuffer({ invoiceNo, buyer, items, footerNote, inclu
       .text('Suma žodžiais: ' + eurosToWordsLt(gross), 36, y, { width: 520 });
 
     y += 24; ensureSpace(40);
-    const note = footerNote || 'Pastaba: neapmokėti užsakymai nevykdomi. Apmokėjimo terminas – 14 kalendorinių dienų. www.raskdali.lt';
+    const note = footerNote || 'Pastaba: neapmokėti užsakymai nevykdomi. www.raskdali.lt';
     doc.font('Sans').fontSize(9).fillColor('#6b7280').text(note, 36, y, { width: 520 });
 
     if (includeReturns) {

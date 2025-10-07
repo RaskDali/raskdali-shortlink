@@ -630,7 +630,7 @@ async function finalizePaidDraft(orderid, reason = 'callback') {
         from: `"RaskDali" <${SELLER.email}>`,
         to: email,
         subject: `Sąskaita – ${invoiceNo}`,
-        html: `${topLogoHtml}<div style="font-family:Arial,sans-serif;font-size:14px"><h2>Ačiū! Mokėjimas gautas ✅</h2><p>Prisegame sąskaitą PDF formatu.</p></div>${EMAIL_FOOTER_HTML}`,
+        html: `${topLogoHtml}<div style="font-family:Arial,sans-serif;font-size:14px"><h2>Ačiū! Mokėjimas gautas ✅</h2><p>Prisegame PVM sąskaitą PDF formatu.</p></div>${EMAIL_FOOTER_HTML}`,
         attachments: [{ filename: `${invoiceNo}.pdf`, content: pdfPlan, contentType: 'application/pdf' }]
       }).catch(e => console.error('MAIL client plan-invoice err:', e));
     }
@@ -689,7 +689,7 @@ app.get('/thanks', async (req, res) => {
       finalizePaidDraft(orderid, 'return').catch(()=>{});
     } else if (ordersCache[orderid]) {
       title = 'Jūsų užsakymas apmokėtas ir priimtas';
-      text = 'Pradėsime vykdymą. Sąskaitą PDF gavote el. paštu.';
+      text = 'Pradėsime vykdymą. PVM Sąskaitą gavote el. paštu.';
       finalizePaidOrder(orderid, 'return').catch(()=>{});
     }
   }
@@ -1107,7 +1107,7 @@ await transporter.sendMail({
       from: `"RaskDali" <${SELLER.email}>`,
       to: o.buyer.email,
       subject: `Mokėjimas gautas – ${o.invoiceNo}`,
-      html: `${topLogoHtml}<h2>Ačiū! Mokėjimas gautas ✅</h2><p>Jūsų užsakymas priimtas vykdymui. Prisegame sąskaitą PDF formatu.</p>${EMAIL_FOOTER_HTML}`,
+      html: `${topLogoHtml}<h2>Ačiū! Mokėjimas gautas ✅</h2><p>Jūsų užsakymas priimtas vykdymui. Prisegame PVM sąskaitą PDF formatu.</p>${EMAIL_FOOTER_HTML}`,
       attachments: [{ filename: `${o.invoiceNo}.pdf`, content: pdf, contentType: 'application/pdf' }],
     }).catch(e => console.error('MAIL client order-paid err:', e));
   }
